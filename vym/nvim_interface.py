@@ -1,4 +1,5 @@
-import asyncio
+"""Interface with the Neovim subprocess."""
+
 import os
 import subprocess
 import socket
@@ -8,10 +9,12 @@ import msgpack
 
 SOCK_PATH = "/tmp/_vymsubnvim.s"
 
+# FIXME: logger!
+
 
 class NvimInterface:
 
-    def __init__(self, loop):
+    def __init__(self, loop, notification_handler):
         self.loop = loop
 
         if os.path.exists(SOCK_PATH):
@@ -24,7 +27,7 @@ class NvimInterface:
             if os.path.exists(SOCK_PATH):
                 break
             print("    wait")
-            # FIXME: yes, we block; if we want to go fully async here we need to find out a better
+            # XXX: yes, we block; if we want to go fully async here we need to find out a better
             # way to ensure that nvim is really up
             time.sleep(.05)
         tdelta = time.time() - tini
@@ -39,6 +42,7 @@ class NvimInterface:
 
         self._callbacks = {}
         self._cb_counter = 0
+        self._notif_handler = notification_handler
 
         self._msg_unpacker = msgpack.Unpacker(raw=False)
 
@@ -83,30 +87,13 @@ class NvimInterface:
 
                 if error is not None:
                     print(f"    ERROR, response: {error!r}")
-                callback(result)
+                if callback is not None:
+                    callback(result)
 
             elif msgtype == 2:
                 # notification
                 method, params = rest
-                print("===========+ Notif", repr(method), repr(params))
+                self._notif_handler(method, params)
 
             else:
                 print(f"    ERROR, bad msg type: {msgtype!r}; rest={rest!r}")
-
-
-async def main():
-    loop = asyncio.get_event_loop()
-    loop.set_debug(True)
-
-    def f(result):
-        print("=========== resp, result", repr(result))
-
-    nvi = NvimInterface(loop)
-    # await nvi.request(f, "nvim_get_color_map")
-    # await nvi.request(f, "nvim_echo", [["Hola"], ["mundo"]], False, {})
-    await nvi.request(f, "nvim_ui_attach", 80, 20, {"ext_linegrid": True})
-    await nvi.request(f, "nvim_list_uis")
-
-    await asyncio.sleep(10)
-
-asyncio.run(main())

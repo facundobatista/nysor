@@ -1,0 +1,15 @@
+- basic info show on start
+- basic interaction with keyboard
+- abrir un archivo real
+- basic interaction with mouse
+- limpiar text view!!!
+- separar barra comnados
+- separar "mensajes"?
+- ponerle un treeview
+- que abra más de un archivo
+- que al abrirlo de terminal, decia:
+    - si es un dir, con treeview (si había sucedio antes, que recuerde ventanas abiertas)
+    - si es un file, sin treeview
+    - si nada, "vacio sin treeview"
+    - si "-", que tome de stdin (sin treeview)
+- entender comportamiento cuando "se muere", qué pasa con "temp de seguridad"
