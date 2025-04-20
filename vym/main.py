@@ -8,10 +8,15 @@ from typing import Any
 
 import qasync
 from PyQt6.QtWidgets import QMainWindow, QPushButton, QVBoxLayout, QWidget
-from PyQt6.QtGui import QKeyEvent, QFont, QFontMetricsF, QTextCursor, QTextCharFormat, QColor
-
-# FIXME
-from PyQt6.QtGui import QPainter, QTextLayout, QTextLine
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QFontMetricsF,
+    QKeyEvent,
+    QPainter,
+    QTextCharFormat,
+    QTextLayout,
+)
 from PyQt6.QtCore import QPointF, Qt, QRectF
 
 from vym.nvim_interface import NvimInterface
@@ -74,6 +79,12 @@ class NvimManager:
         """Clear the grid."""
         self.main_window.clear_display()
 
+    def _n__grid_cursor_goto(self, args):
+        """Resize a grid."""
+        grid_id, row, col = args
+        assert grid_id == 1  # is it always 1? when do we have more than one?
+        self.main_window.set_cursor(row, col)
+
     def _n__grid_line(self, *args):
         """Expose a line in the grid."""
         for item in args:
@@ -112,12 +123,32 @@ class NvimManager:
         for group_name, hl_id in args:
             hl_groups[group_name] = hl_id
 
+    def _n__mode_change(self, args):
+        """Information about cursor mode."""
+        mode, mode_idx = args
+        # we ignore the mode idx as we stored in the modes in a dict using the name
+        mode_info = self.structs["mode-info"][mode]
+        self.main_window.change_mode(mode_info)
+
     def _n__mode_info_set(self, args):
         """Information about cursor mode."""
         cursor_style_enabled, mode_info = args
         assert cursor_style_enabled  # may it come in False? what do we do? delete previous modes?
-        info = {mi["name"]: mi for mi in mode_info}
+
+        info = {}
+        for mi in mode_info:
+            # store by name (and remove it from the real data, together with short name)
+            name = mi.pop("name")
+            del mi["short_name"]
+            info[name] = mi
+
         self.structs.setdefault("mode-info", {}).update(info)
+
+    def _n__mouse_on(self, args):
+        """Properly ignored."""
+
+    def _n__mouse_off(self, args):
+        """Properly ignored."""
 
     def _n__option_set(self, *options):
         options = dict(options)
@@ -160,11 +191,13 @@ class TextDisplay(QWidget):
         self.display_size = (80, 20)
         self.set_font("Courier", 12)
 
-        self.lines = []
+        self.paint_lines = {}
+        self.cursor_pos = (0, 0)
+        self.cursor_painter = None
 
     def clear(self):
         """Clear the display."""
-        self.lines = []
+        self.paint_lines = {}
 
     def set_font(self, name, size):
         """Set the font."""
@@ -186,8 +219,8 @@ class TextDisplay(QWidget):
         print("========== FM! height", line_height)
         print("========== FM! bound rect", fm.boundingRect("█"))
         print("========== FM! size", fm.size(0, "█"))
-        #br = fm.boundingRect("█")
-        #self.cell_size = (br.width(), br.height())
+        # br = fm.boundingRect("█")
+        # self.cell_size = (br.width(), br.height())
 
         self.resize_view()
 
@@ -221,99 +254,160 @@ class TextDisplay(QWidget):
 
     def add_line(self, row, col, textinfo):
         """Add a line to the display."""
-        self.lines.append((row, col, textinfo))
+        self.paint_lines[row] = (col, textinfo)
         self.update()
+
+    def set_cursor(self, row, col):
+        """Set the cursor position in the display."""
+        # assert row not in self.paint_lines  # FIXME: implement!
+        # self.paint_lines[row] = (col, [("█", fmt)])
+        # self.update()
+        self.cursor_pos = (row, col)
+
+    def _paint_cursor_block(self, painter, start_x, start_y):
+        """Draw a cursor as a block."""
+        cell_width, cell_height = self.cell_size
+        print("============= cursor?", (start_x, start_y, cell_width, cell_height))
+        painter.fillRect(int(start_x), int(start_y), int(cell_width), int(cell_height), Qt.GlobalColor.blue)
 
     def paintEvent(self, event):
         """Paint the widget."""
         painter = QPainter(self)
         painter.setFont(self.font)
-        painter.fillRect(self.rect(), Qt.GlobalColor.white)  # FIXME: maybe this is not needed, as vim quickly will fillout
+
+        # FIXME: maybe this is not needed, as vim quickly will fillout
+        painter.fillRect(self.rect(), Qt.GlobalColor.white)
 
         print("======= paint!")
         cell_width, cell_height = self.cell_size
-        for row, col, textinfo in self.lines:
-            print("=============== pnt", row, col, len(textinfo))
-            delta_y = -1
-            if row == 17:
-                c, f = textinfo[0]
-                textinfo[0] = ("█", f)
-            if row == 18:
-                #c, f = textinfo[36]
-                #textinfo[36] = ("█", f)
-                c, f = textinfo[37]
+        cursor_row, cursor_col = self.cursor_pos
+        for row in range(self.display_size[1]):
+            orig_y = row * cell_height
 
-                delta_y += -1
-
-                #textinfo[37] = ("昔", f)
-                #delta_y += -2.0
-
-
-                #textinfo[37] = ("X", f)
-                #delta_y += 1
-
-            complete_text = "".join(text for text, fmt in textinfo)
-            #if row == 19:
-            #    continue
-
-            fm = QFontMetricsF(self.font)
-            # print("=================== dinszi", fm.size(0, complete_text), repr(complete_text))
-            layout = QTextLayout(complete_text, self.font)
-
-            # formats
-            all_fmt_ranges = []
-            start = 0
-            for text, fmt in textinfo:
-                fmt_range = QTextLayout.FormatRange()
-                fmt_range.start = start
-                fmt_range.length = len(text)
-                fmt_range.format = fmt
-                all_fmt_ranges.append(fmt_range)
-                start += len(text)
-            layout.setFormats(all_fmt_ranges)
-
-            layout.beginLayout()
-            line = layout.createLine()
-            layout.endLayout()
-
-            if line.isValid():
-                x = col * cell_width
-                orig_y = y = row * cell_height
-
-                # extra y to accommodate base of the font to it's place
-                line_height = line.height()
-
-                print("======= line set", x, y, line.naturalTextRect())
-                natural_height = line.naturalTextRect().height
-                print("======= other line data", line.ascent(), line.descent(), line.height())
-                xxx = line.height() - natural_height()
-                print("======= xxx", xxx, delta_y)
-                delta_y = (xxx - 1.2) * 2
-                print("======= epa", delta_y)
-
-                #line.setPosition(QPointF(0, 0)) #+ line.ascent()))
-                line.setPosition(QPointF(0, delta_y))
-                #layout.draw(painter, QPointF(0, 0))
-                #layout.draw(painter, QPointF(x, y))
-
-                # Recortamos lo que se desborda del alto deseado
-                rect = QRectF(0, orig_y, self.width(), cell_height - 1)
-                painter.save()
-                painter.setClipRect(rect)
-                layout.draw(painter, QPointF(x, orig_y))
-                painter.restore()
-
-                #painter.setPen(QColor(200, 200, 200))  # gris claro
-                #painter.drawRect(math.ceil(x), math.ceil(y), math.ceil(cell_width * len(complete_text)), math.ceil(cell_height))
-                painter.setPen(QColor(0, 0, 255))  # gris claro
-                painter.drawPoint(QPointF(x, orig_y))
-
+            line_data = self.paint_lines.get(row)
+            if line_data is None:
+                complete_text = ""
+                x = 0
             else:
-                logger.warning("Invalid display line: %d %d %s", row, col, textinfo)
+                col, textinfo = self.paint_lines.get(row)
+                x = col * cell_width
+                print("=============== pnt", row, col, len(textinfo))
+                delta_y = -1
 
+                complete_text = "".join(text for text, fmt in textinfo)
 
+                # print("================ dinszi", fm.size(0, complete_text), repr(complete_text))
+                layout = QTextLayout(complete_text, self.font)
+
+                # formats
+                all_fmt_ranges = []
+                start = 0
+                for text, fmt in textinfo:
+                    fmt_range = QTextLayout.FormatRange()
+                    fmt_range.start = start
+                    fmt_range.length = len(text)
+                    fmt_range.format = fmt
+                    all_fmt_ranges.append(fmt_range)
+                    start += len(text)
+                layout.setFormats(all_fmt_ranges)
+
+                layout.beginLayout()
+                line = layout.createLine()
+                layout.endLayout()
+
+                if line.isValid():
+                    # y = orig_y
+
+                    # extra y to accommodate base of the font to it's place
+                    # FIXME: clean
+                    # print("======= line set", x, y, line.naturalTextRect())
+                    natural_height = line.naturalTextRect().height
+                    # print("===== other line data", line.ascent(), line.descent(), line.height())
+                    xxx = line.height() - natural_height()
+                    # print("======= xxx", xxx, delta_y)
+                    delta_y = (xxx - 1.2) * 2
+                    # print("======= epa", delta_y)
+
+                    # line.setPosition(QPointF(0, 0)) #+ line.ascent()))
+                    line.setPosition(QPointF(0, delta_y))
+                    # layout.draw(painter, QPointF(0, 0))
+                    # layout.draw(painter, QPointF(x, y))
+
+                    # Recortamos lo que se desborda del alto deseado
+                    rect = QRectF(0, orig_y, self.width(), cell_height - 1)
+                    painter.save()
+                    painter.setClipRect(rect)
+                    layout.draw(painter, QPointF(x, orig_y))
+                    painter.restore()
+
+                    # painter.setPen(QColor(200, 200, 200))  # gris claro
+                    # painter.drawRect(
+                    #    math.ceil(x),
+                    # math.ceil(y),
+                    # math.ceil(cell_width * len(complete_text)), math.ceil(cell_height))
+                    painter.setPen(QColor(0, 0, 255))  # gris claro
+                    painter.drawPoint(QPointF(x, orig_y))
+
+                else:
+                    logger.warning("Invalid display line: %d %d %s", row, col, textinfo)
+
+            if row == cursor_row and self.cursor_painter is not None:
+                fm = QFontMetricsF(self.font)  # FIXME instantiate once when font is changed?
+                after_text = complete_text[:cursor_col]
+                print("======== cursor text after?", repr(after_text), repr(complete_text))
+                cursor_x = x + fm.horizontalAdvance(after_text)
+                self.cursor_painter(painter, cursor_x, orig_y)
 
         painter.end()
+
+    def change_mode(self, mode_info):
+        """Change mode."""
+        # FIXME: consider a model where we assert what attributes we implement (instead of
+        # copying and changing the dict) -- even we can declare attributes here and nvimmanager
+        # will assert (and maybe alert) when stuff is informed AND NOT EVERY TIME HERE
+
+        mode_info = mode_info.copy()  # copy because will consume
+        print("======== cmode!", mode_info)
+
+        # this is just discarded (if present), as neovim documentation says "to be implemented"
+        mode_info.pop("mouse_shape", None)
+
+        # these two are also discarded as they are deprecated
+        mode_info.pop("hl_id", None)
+        mode_info.pop("id_lm", None)
+
+        if "attr_id_lm" in mode_info:
+            attr_id_lm = mode_info.pop("attr_id_lm")
+            assert attr_id_lm == 0  # FIXME: we need to implement this?
+
+        # FIXME: consider a model where all this processing is done when configuration is
+        # received originally, so the gap between "neovim config" and our "internal config" is
+        # done once, and mismatches are detected earlier
+        if "blinkon" in mode_info:
+            # consider that if one is present, the three will be
+            blinkon = mode_info.pop("blinkon")
+            blinkoff = mode_info.pop("blinkoff")
+            blinkwait = mode_info.pop("blinkwait")
+            if blinkon or blinkoff or blinkwait:
+                logger.warning(
+                    "Cursor blinking not supported yet - on=%d off=%d wait=%d",
+                    blinkon,
+                    blinkoff,
+                    blinkwait,
+                )
+
+        # we need a cursor, be gentle with input and default to a full block
+        cursor_shape = mode_info.pop("cursor_shape", "block")
+        cursor_perc = mode_info.pop("cell_percentage", 20)
+        cursor_attr_id = mode_info.pop("attr_id", 0)
+        print("========= CURSOR color", cursor_attr_id)
+        if cursor_shape == "block":
+            self.cursor_painter = self._paint_cursor_block
+        else:
+            # FIXME
+            print("============== CURSOR forma!!!", cursor_shape, cursor_perc)
+
+        logger.warning("Some mode change info remainned unprocessed: %s", mode_info)
 
 
 class Vym(QMainWindow):
@@ -348,39 +442,19 @@ class Vym(QMainWindow):
 
     def test_action(self):
         print("Botón de PyQt6 presionado")
-        self.display.clear()
-        self.display.add_line(0, 0, "0123456789" * 8)
-        #self.display.setPlainText("M" * 80)
-        return
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        self.display.setPlainText("".join(f"{idx}\n" for idx in range(20)))
-        return
 
-        # Insertar palabra al principio
-        cursor = self.display.textCursor()
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        cursor.insertText("Inicio!")
-
-        # Texto inicial
-        text = "Línea 1\nLínea 2\nLínea 3\nLínea 4"
-        self.display.setPlainText(text)
-
-        cursor.insertText(" Moño  昔 ばなし\n")
-        cursor.insertText("emoji 😆d\n")
-        cursor.insertText("emoji asd\n")
-
-        # Mover a fila 3, columna 7
-        # FIXME: tenemos que entender mejor estos movimientos, y si son sobre el "view area" o el buffer en sí
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        cursor.movePosition(QTextCursor.MoveOperation.Down, QTextCursor.MoveMode.MoveAnchor, 2)  # Bajar dos líneas
-        cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, 6) # Mover a col 7
-
-        # Formatear palabra con fondo amarillo y texto azul
         fmt = QTextCharFormat()
         fmt.setForeground(QColor("blue"))
         fmt.setBackground(QColor("yellow"))
 
-        cursor.insertText("Marcado", fmt)
+        # hacks
+        self.display.lines[3] = (4, 0, [(" 0123456789" * 8, fmt)])
+        self.display.lines[5] = (5, 0, [(" Moño g 昔 ばなし CULO", fmt)])
+
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor("black"))
+        fmt.setBackground(QColor("white"))
+        self.display.lines[6] = (6, 0, [(" emoji 😆d", fmt)])
 
     async def async_task(self):
         def f(result):
@@ -404,6 +478,10 @@ class Vym(QMainWindow):
         #     self.nvim_process.waitForFinished(3000)
         # event.accept()
 
+    def change_mode(self, mode_info):
+        """FIXME."""
+        self.display.change_mode(mode_info)
+
     def clear_display(self):
         """Clear the display."""
         self.display.clear()
@@ -411,6 +489,11 @@ class Vym(QMainWindow):
     def set_font(self, name, size):
         """Set the font in the display."""
         self.display.set_font(name, size)
+
+    def set_cursor(self, row, col):
+        """Set the cursor in the display."""
+        # default_color = self._build_text_format(None)
+        self.display.set_cursor(row, col)  # , default_color)  FIXME
 
     def resize_display(self, size):
         """Resize the display."""
@@ -429,7 +512,7 @@ class Vym(QMainWindow):
 
         if hl_id:  # cover also the case of it being 0, which *may* indicate default colors
             hl_attrs = self.nvim_manager.structs["hl-attrs"]
-            hl = hl_attrs[hl_id]
+            hl = hl_attrs[hl_id].copy()  # copy because will consume
 
             # basic colors, that may be reversed
             reverse = hl.pop("reverse", False)

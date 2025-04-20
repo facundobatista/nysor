@@ -1,11 +1,19 @@
+fase 1
 - basic info show on start
 - basic interaction with keyboard
 - abrir un archivo real
 - basic interaction with mouse
+- ver al resizear ventana
 - limpiar text view!!!
+- repensar que nvimanager llame directamnte al "display"
+- fixear / anotar los FIXME y XXXs
+
+fase 2
 - separar barra comnados
 - separar "mensajes"?
 - ponerle un treeview
+
+fase 3
 - que abra más de un archivo
 - que al abrirlo de terminal, decia:
     - si es un dir, con treeview (si había sucedio antes, que recuerde ventanas abiertas)
