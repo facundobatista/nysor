@@ -1,6 +1,11 @@
 fase 1
-- basic info show on start
 - basic interaction with keyboard
+    - pintar bien cursor
+    - flechas!
+    - scroll vertical al llegar al final
+    - scroll horizontal?
+    - tab
+    - ctrl-M
 - abrir un archivo real
 - basic interaction with mouse
 - ver al resizear ventana

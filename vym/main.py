@@ -1,6 +1,7 @@
 """Main program."""
 
 import asyncio
+import functools
 import logging
 import math
 import sys
@@ -20,6 +21,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtCore import QPointF, Qt, QRectF
 
 from vym.nvim_interface import NvimInterface
+from vym.logical_lines import LogicalLines
 
 logging.basicConfig(
     format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s', datefmt='%H:%M:%S')
@@ -75,8 +77,14 @@ class NvimManager:
             "special": rgb_sp,
         })
 
-    def _n__grid_clear(self, _):
+    def _n__flush(self, _):
         """Clear the grid."""
+        self.main_window.flush()
+
+    def _n__grid_clear(self, args):
+        """Clear the grid."""
+        (grid_id,) = args
+        assert grid_id == 1  # is it always 1? when do we have more than one?
         self.main_window.clear_display()
 
     def _n__grid_cursor_goto(self, args):
@@ -98,6 +106,12 @@ class NvimManager:
         grid_id, width, height = args
         assert grid_id == 1  # is it always 1? when do we have more than one?
         self.main_window.resize_display((width, height))
+
+    def _n__grid_scroll(self, args):
+        """Scroll a grid."""
+        grid_id, top, bottom, left, right, rows, cols = args
+        assert grid_id == 1  # is it always 1? when do we have more than one?
+        self.main_window.display.scroll((top, bottom, rows), (left, right, cols))
 
     def _n__hl_attr_define(self, *args):
         """Add highlights with their attributes.
@@ -191,13 +205,17 @@ class TextDisplay(QWidget):
         self.display_size = (80, 20)
         self.set_font("Courier", 12)
 
-        self.paint_lines = {}
+        #self.paint_lines = set()
+        self.lines = LogicalLines()
         self.cursor_pos = (0, 0)
         self.cursor_painter = None
+        self.need_grid_clearing = True
 
     def clear(self):
         """Clear the display."""
-        self.paint_lines = {}
+        self.need_grid_clearing = True
+        print("================= clear scheduled")
+        self.lines = LogicalLines()
 
     def set_font(self, name, size):
         """Set the font."""
@@ -219,8 +237,8 @@ class TextDisplay(QWidget):
         print("========== FM! height", line_height)
         print("========== FM! bound rect", fm.boundingRect("█"))
         print("========== FM! size", fm.size(0, "█"))
-        # br = fm.boundingRect("█")
-        # self.cell_size = (br.width(), br.height())
+        #br = fm.boundingRect("M")
+        #self.cell_size = (math.ceil(br.width()), math.ceil(br.height()))
 
         self.resize_view()
 
@@ -252,113 +270,142 @@ class TextDisplay(QWidget):
         self.setFixedSize(view_width, view_height)
         self.main_window.adjustSize()
 
-    def add_line(self, row, col, textinfo):
-        """Add a line to the display."""
-        self.paint_lines[row] = (col, textinfo)
+    def write_line(self, row, col, textinfo):
+        """Write a line in the display."""
+        self.lines.add(row, col, textinfo)
+        ## expand the textinfo so we have one format per character, to keep our logical grid
+        #expanded = []
+        #for text, fmt in textinfo:
+        #    expanded.extend((char, fmt) for char in text)
+
+        #print("============= write line row", row)
+        #prvline = self.logical_lines.setdefault(row, [])
+        #if col > len(prvline):
+        #    raise ValueError("Trying to write outside the line; needs to rethink model!!!")
+        #print("============= prev?", len(prvline))
+        #prvline[col: col + len(expanded)] = expanded
+        #print("============= prev!", len(prvline))
+        #print("============= prev=", repr("".join(text for text, fmt in prvline)))
+        ##self.paint_lines.add(row)
+        ##print("============= rows to repaint", sorted(self.paint_lines))
+
+    def scroll(self, vertical, horizontal):
+        """Scroll the grid."""
+        top, bottom, delta = vertical
+        if delta:
+            self.lines.scroll_vertical(top, bottom, delta)
+
+        left, right, delta = horizontal
+        assert delta == 0  # FIXME: need to implement!!
+        if delta:
+            self.lines.scroll_horizontal(left, right, delta)
+
+    def flush(self):
+        """FIXME."""
+        print("========= Flushhhhhhhhh!")
         self.update()
 
     def set_cursor(self, row, col):
         """Set the cursor position in the display."""
-        # assert row not in self.paint_lines  # FIXME: implement!
-        # self.paint_lines[row] = (col, [("█", fmt)])
-        # self.update()
+        print("========= new cursor pos", row, col)
         self.cursor_pos = (row, col)
 
     def _paint_cursor_block(self, painter, start_x, start_y):
         """Draw a cursor as a block."""
         cell_width, cell_height = self.cell_size
-        print("============= cursor?", (start_x, start_y, cell_width, cell_height))
-        painter.fillRect(int(start_x), int(start_y), int(cell_width), int(cell_height), Qt.GlobalColor.blue)
+        print("============= cursor block (CAMBIAR COLOR)?", (
+            start_x, start_y, cell_width, cell_height))
+        painter.fillRect(
+            int(start_x), int(start_y), int(cell_width), int(cell_height), Qt.GlobalColor.blue)
+
+    def _paint_cursor_vertical(self, percentage, painter, start_x, start_y):
+        """Draw a cursor as a block."""
+        cell_width, cell_height = self.cell_size
+        print("============= cursor vertical (CAMBIAR COLOR)?", percentage, (
+            start_x, start_y, cell_width, cell_height))
+        painter.fillRect(
+            int(start_x), int(start_y),
+            int(cell_width * percentage / 100), int(cell_height), Qt.GlobalColor.blue)
 
     def paintEvent(self, event):
         """Paint the widget."""
+        print("======= PAINT!")
         painter = QPainter(self)
         painter.setFont(self.font)
 
-        # FIXME: maybe this is not needed, as vim quickly will fillout
-        painter.fillRect(self.rect(), Qt.GlobalColor.white)
+        #if self.need_grid_clearing:
+        #    # special initial case to clear up the whole viewer
+        #    logger.debug("Initial clearing")
+        #    self.need_grid_clearing = False
+        #    print("============= CLEAR (really)")
+        #    painter.fillRect(self.rect(), Qt.GlobalColor.white)
 
-        print("======= paint!")
         cell_width, cell_height = self.cell_size
-        cursor_row, cursor_col = self.cursor_pos
         for row in range(self.display_size[1]):
             orig_y = row * cell_height
+            x = 0  # all logical lines start at column 0
 
-            line_data = self.paint_lines.get(row)
-            if line_data is None:
-                complete_text = ""
-                x = 0
+            logical_line = self.lines.get(row)
+            if logical_line is None:
+                rect = QRectF(x, orig_y, self.width(), cell_height)
+                painter.fillRect(rect, Qt.GlobalColor.white)
+                continue
+
+            # FIXME: some of all this should be cached in LogicalLine, no need to recreate
+            # everything on each paint
+            complete_text = "".join(text for text, fmt in logical_line)
+
+            print("================ paint", row, len(complete_text), repr(complete_text))
+            layout = QTextLayout(complete_text, self.font)
+
+            # formats
+            all_fmt_ranges = []
+            for start, (char, fmt) in enumerate(logical_line):
+                fmt_range = QTextLayout.FormatRange()
+                fmt_range.start = start
+                fmt_range.length = 1
+                fmt_range.format = fmt
+                all_fmt_ranges.append(fmt_range)
+            layout.setFormats(all_fmt_ranges)
+
+            layout.beginLayout()
+            line = layout.createLine()
+            layout.endLayout()
+
+            if line.isValid():
+                # extra y to accommodate base of the font to it's place
+                natural_height = line.naturalTextRect().height
+                delta_y = (line.height() - natural_height() - 1.2) * 2
+                line.setPosition(QPointF(0, delta_y))
+
+                # Recortamos lo que se desborda del alto deseado
+                rect = QRectF(0, orig_y, self.width(), cell_height - 1)
+                painter.save()
+                painter.setClipRect(rect)
+                layout.draw(painter, QPointF(x, orig_y))
+                painter.restore()
+
+                # FIXME: remove blue points
+                painter.setPen(QColor(0, 0, 255))
+                painter.drawPoint(QPointF(x, orig_y))
+
             else:
-                col, textinfo = self.paint_lines.get(row)
-                x = col * cell_width
-                print("=============== pnt", row, col, len(textinfo))
-                delta_y = -1
+                logger.warning("Invalid display line: %d %d %s", row, logical_line)
 
-                complete_text = "".join(text for text, fmt in textinfo)
-
-                # print("================ dinszi", fm.size(0, complete_text), repr(complete_text))
-                layout = QTextLayout(complete_text, self.font)
-
-                # formats
-                all_fmt_ranges = []
-                start = 0
-                for text, fmt in textinfo:
-                    fmt_range = QTextLayout.FormatRange()
-                    fmt_range.start = start
-                    fmt_range.length = len(text)
-                    fmt_range.format = fmt
-                    all_fmt_ranges.append(fmt_range)
-                    start += len(text)
-                layout.setFormats(all_fmt_ranges)
-
-                layout.beginLayout()
-                line = layout.createLine()
-                layout.endLayout()
-
-                if line.isValid():
-                    # y = orig_y
-
-                    # extra y to accommodate base of the font to it's place
-                    # FIXME: clean
-                    # print("======= line set", x, y, line.naturalTextRect())
-                    natural_height = line.naturalTextRect().height
-                    # print("===== other line data", line.ascent(), line.descent(), line.height())
-                    xxx = line.height() - natural_height()
-                    # print("======= xxx", xxx, delta_y)
-                    delta_y = (xxx - 1.2) * 2
-                    # print("======= epa", delta_y)
-
-                    # line.setPosition(QPointF(0, 0)) #+ line.ascent()))
-                    line.setPosition(QPointF(0, delta_y))
-                    # layout.draw(painter, QPointF(0, 0))
-                    # layout.draw(painter, QPointF(x, y))
-
-                    # Recortamos lo que se desborda del alto deseado
-                    rect = QRectF(0, orig_y, self.width(), cell_height - 1)
-                    painter.save()
-                    painter.setClipRect(rect)
-                    layout.draw(painter, QPointF(x, orig_y))
-                    painter.restore()
-
-                    # painter.setPen(QColor(200, 200, 200))  # gris claro
-                    # painter.drawRect(
-                    #    math.ceil(x),
-                    # math.ceil(y),
-                    # math.ceil(cell_width * len(complete_text)), math.ceil(cell_height))
-                    painter.setPen(QColor(0, 0, 255))  # gris claro
-                    painter.drawPoint(QPointF(x, orig_y))
-
-                else:
-                    logger.warning("Invalid display line: %d %d %s", row, col, textinfo)
-
-            if row == cursor_row and self.cursor_painter is not None:
-                fm = QFontMetricsF(self.font)  # FIXME instantiate once when font is changed?
-                after_text = complete_text[:cursor_col]
-                print("======== cursor text after?", repr(after_text), repr(complete_text))
-                cursor_x = x + fm.horizontalAdvance(after_text)
-                self.cursor_painter(painter, cursor_x, orig_y)
+        # paint the cursor if we can
+        cursor_row, cursor_col = self.cursor_pos
+        if self.cursor_painter is not None:
+            print("======== cursor paint?", cursor_row)
+            logical_line = self.lines.get(cursor_row) or []
+            fm = QFontMetricsF(self.font)  # FIXME instantiate once when font is changed?
+            after_text = "".join(text for text, fmt in logical_line[:cursor_col])
+            print("======== cursor text after?", repr(after_text))
+            cursor_x = fm.horizontalAdvance(after_text)
+            cursor_y = cursor_row * cell_height
+            self.cursor_painter(painter, cursor_x, cursor_y)
 
         painter.end()
+        #self.paint_lines.clear()
 
     def change_mode(self, mode_info):
         """Change mode."""
@@ -403,11 +450,14 @@ class TextDisplay(QWidget):
         print("========= CURSOR color", cursor_attr_id)
         if cursor_shape == "block":
             self.cursor_painter = self._paint_cursor_block
+        elif cursor_shape == "vertical":
+            self.cursor_painter = functools.partial(self._paint_cursor_vertical, cursor_perc)
         else:
             # FIXME
             print("============== CURSOR forma!!!", cursor_shape, cursor_perc)
 
-        logger.warning("Some mode change info remainned unprocessed: %s", mode_info)
+        if mode_info:
+            logger.warning("Some mode change info remained unprocessed: %s", mode_info)
 
 
 class Vym(QMainWindow):
@@ -462,12 +512,17 @@ class Vym(QMainWindow):
 
         await self.nvi.request(f, "nvim_list_uis")
 
+    async def _send_key_to_nvim(self, key):
+        """FIXME."""
+        await self.nvi.request(None, "nvim_input", key)
+
     def keyPressEvent(self, event: QKeyEvent):
         """Evita que PyQt6 capture el teclado, permitiendo que Neovim lo maneje por completo."""
         event.ignore()  # FIXME: para qué?
         key = event.text()  # FIXME: eso qué da, y que le podemos pasar a nvim?
-        print("========== Key", repr(key))
+        print("\n========== Key", repr(key))
         # FIXME: es raro; el Tab no se ve, y los modificadores a veces vienen o no
+        asyncio.create_task(self._send_key_to_nvim(key))
 
     def closeEvent(self, event):
         """Cierra Neovim correctamente al cerrar la ventana."""
@@ -592,7 +647,11 @@ class Vym(QMainWindow):
 
             textinfo.append((text, fmt))
 
-        self.display.add_line(row, col, textinfo)
+        self.display.write_line(row, col, textinfo)
+
+    def flush(self):
+        """FIXME."""
+        self.display.flush()
 
 
 if __name__ == "__main__":
