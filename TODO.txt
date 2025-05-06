@@ -1,14 +1,7 @@
 fase 1
-- basic interaction with keyboard
-    - pintar bien cursor
-    - flechas!
-    - scroll vertical al llegar al final
-    - scroll horizontal?
-    - tab
-    - ctrl-M
-- abrir un archivo real
 - basic interaction with mouse
-- ver al resizear ventana
+- que siempre queden con fondo OK las lineas
+- soportar caracteres anchos?
 - limpiar text view!!!
 - repensar que nvimanager llame directamnte al "display"
 - fixear / anotar los FIXME y XXXs
@@ -26,3 +19,6 @@ fase 3
     - si nada, "vacio sin treeview"
     - si "-", que tome de stdin (sin treeview)
 - entender comportamiento cuando "se muere", qué pasa con "temp de seguridad"
+
+fase 4
+- que sean distintos procesos, pero que si se abre repe *lo sepa y suba esa ventana*

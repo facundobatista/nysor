@@ -1,11 +1,11 @@
 """Main program."""
 
 import asyncio
-import functools
 import logging
 import math
 import sys
 from typing import Any
+from functools import partial
 
 import qasync
 from PyQt6.QtWidgets import QMainWindow, QPushButton, QVBoxLayout, QWidget
@@ -18,7 +18,7 @@ from PyQt6.QtGui import (
     QTextCharFormat,
     QTextLayout,
 )
-from PyQt6.QtCore import QPointF, Qt, QRectF
+from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
 
 from vym.nvim_interface import NvimInterface
 from vym.logical_lines import LogicalLines
@@ -38,6 +38,40 @@ UNDERLINE_STYLES = [
     ("underdotted", QTextCharFormat.UnderlineStyle.DotLine),
     ("underdashed", QTextCharFormat.UnderlineStyle.DashUnderline),
 ]
+
+# never ask to Neovim a grid smaller than these
+MIN_COLS_ROWS = 5
+
+# conversion between Qt key codes and Neovim names for some special keys
+QT_NVIM_KEYS_MAP = {
+    Qt.Key.Key_Left: "Left",
+    Qt.Key.Key_Right: "Right",
+    Qt.Key.Key_Up: "Up",
+    Qt.Key.Key_Down: "Down",
+    Qt.Key.Key_Home: "Home",
+    Qt.Key.Key_End: "End",
+    Qt.Key.Key_PageUp: "PageUp",
+    Qt.Key.Key_PageDown: "PageDown",
+    Qt.Key.Key_Insert: "Insert",
+    Qt.Key.Key_Delete: "Del",
+    Qt.Key.Key_Backspace: "BS",
+    Qt.Key.Key_Return: "CR",
+    Qt.Key.Key_Enter: "Enter",
+    Qt.Key.Key_Tab: "Tab",
+    Qt.Key.Key_Escape: "Esc",
+    Qt.Key.Key_F1: "F1",
+    Qt.Key.Key_F2: "F2",
+    Qt.Key.Key_F3: "F3",
+    Qt.Key.Key_F4: "F4",
+    Qt.Key.Key_F5: "F5",
+    Qt.Key.Key_F6: "F6",
+    Qt.Key.Key_F7: "F7",
+    Qt.Key.Key_F8: "F8",
+    Qt.Key.Key_F9: "F9",
+    Qt.Key.Key_F10: "F10",
+    Qt.Key.Key_F11: "F11",
+    Qt.Key.Key_F12: "F12",
+}
 
 
 class NvimManager:
@@ -98,7 +132,8 @@ class NvimManager:
         for item in args:
             grid, row, col_start, cells, wrap = item
             assert grid == 1  # same question we do in grid_resize
-            assert not wrap  # XXX: need to implement this, if real
+
+            # note we ignore "wrap", couldn't find proper utility for it
             self.main_window.write_display(row, col_start, cells)
 
     def _n__grid_resize(self, args):
@@ -171,7 +206,10 @@ class NvimManager:
 
         # react to some of those options
         if "guifont" in options:
-            self._set_guifont(options["guifont"])
+            name, size = options["guifont"].split(":")
+            assert size[0] == "h"
+            size = float(size[1:])
+            self.main_window.set_font(name, size)
 
     def _n__set_icon(self, param):
         """Set the icon, if any."""
@@ -184,38 +222,115 @@ class NvimManager:
         (title,) = param
         self.main_window.setWindowTitle(title)
 
-    # -- helper methods
-
-    def _set_guifont(self, fontspec):
-        """Set the font in the GUI."""
-        name, size = fontspec.split(":")
-        assert size[0] == "h"
-        size = float(size[1:])
-        self.main_window.set_font(name, size)
+    def _n__win_viewport(self, args):
+        """Ignoring this, it's not documented, and it looks it's not useful for us."""
 
 
 class TextDisplay(QWidget):
-    def __init__(self, main_window, nvim_manager):
+    def __init__(self, main_window, nvim_manager, loop):
         super().__init__()
         self.main_window = main_window
         self.nvim_manager = nvim_manager
+        self.loop = loop  # FIXME: this will go away eventually when "request" can be done easily
+        self.initial_resizing_done = False
 
         # some defaults
         self.cell_size = None
         self.display_size = (80, 20)
+        self.widget_size = QSize(100, 100)  # default valid pseudo-useful value
         self.set_font("Courier", 12)
 
-        #self.paint_lines = set()
-        self.lines = LogicalLines()
+        self.lines = {}  # real logical lines will be built automatically later
         self.cursor_pos = (0, 0)
         self.cursor_painter = None
         self.need_grid_clearing = True
 
+        # get *all* keyboard events in this widget
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._t()
+
+    def focusNextPrevChild(self, next):
+        """Do not allow to "navigate" widgets out of here."""
+        return False
+
+    def sizeHint(self):
+        """Provide the desired size for the widget."""
+        print("=++++++===== hint!", self.widget_size)
+        return self.widget_size
+
+    def _t(self):
+        print("====++++++======= _TT")
+
+    def resizeEvent(self, event):
+        """Hook up in the event to allow informing Neovim of new window size."""
+        super().resizeEvent(event)
+        print("====++++++======= RESIZE -- TD", (self.width(), self.height()), event.oldSize(), event.size())
+        cell_width, cell_height = self.cell_size
+        cols = max(MIN_COLS_ROWS, int(self.width() / cell_width))
+        rows = max(MIN_COLS_ROWS, int(self.height() / cell_height))
+
+        ## this verification and guardrail is to prevent an infinite loop of resizings when the
+        ## GUI window is initially started and adjusted
+        #if self.display_size == (cols, rows):
+        #    print("====+++++=== MAtch!")
+        #    self.initial_resizing_done = True
+        #if not self.initial_resizing_done:
+        #    return
+
+        # FIXME: reordenar lo que "nvi" ofrece, quizás este request debería tener una versión
+        # "bloqueante" que llame a asyncio.create_task automaticamente y no tengamos que hacerlo
+        # acá?
+        print("===++++++==========       cols/rows", cols, rows)
+        self.loop.create_task(self.main_window.nvi.request(None, "nvim_ui_try_resize", cols, rows))
+        print("===+++++===========  rE finished")
+
+    async def _send_key_to_nvim(self, key):
+        """FIXME."""  # FIXME
+        await self.main_window.nvi.request(None, "nvim_input", key)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        """Get all keyboard events."""
+        print("\n========== Key", repr(event.text()), hex(event.key()), repr(event.modifiers()))
+
+        # simple case when it's just unicode text
+        key_text = event.text()
+        if key_text:
+            self.loop.create_task(self._send_key_to_nvim(key_text))
+            return
+
+        # need to compose special keys
+        key = event.key()
+        keyname = QT_NVIM_KEYS_MAP.get(key)
+        if keyname is None:
+            return
+
+        modifiers = event.modifiers()
+        parts = []
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            parts.append("C")
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            parts.append("S")
+        if modifiers & Qt.KeyboardModifier.AltModifier:
+            parts.append("A")
+        if modifiers & Qt.KeyboardModifier.MetaModifier:
+            parts.append("D")  # 'D' often represents 'Command' in Mac
+
+        parts.append(keyname)
+        composed = f"<{"-".join(parts)}>"
+        print("============= key composed:", repr(composed))
+        asyncio.create_task(self._send_key_to_nvim(composed))
+
+    def _build_empty_logical_lines(self):
+        """Build an empty logical lines."""
+        default_fmt = self.main_window._build_text_format(None)
+        cols, rows = self.display_size
+        return LogicalLines(rows, cols, default_fmt)
+
     def clear(self):
         """Clear the display."""
         self.need_grid_clearing = True
-        print("================= clear scheduled")
-        self.lines = LogicalLines()
+        print("====++++++======= clear scheduled")
+        self.lines = self._build_empty_logical_lines()
 
     def set_font(self, name, size):
         """Set the font."""
@@ -230,7 +345,7 @@ class TextDisplay(QWidget):
 
         # store font sizes
         fm = QFontMetricsF(self.font)
-        char_width = fm.horizontalAdvance("█")
+        char_width = fm.horizontalAdvance("M")
         line_height = fm.height()
         self.cell_size = (char_width, line_height)
         print("========== FM! horiz advance", char_width)
@@ -240,16 +355,19 @@ class TextDisplay(QWidget):
         #br = fm.boundingRect("M")
         #self.cell_size = (math.ceil(br.width()), math.ceil(br.height()))
 
-        self.resize_view()
+        self.resize_view(force=True)
 
-    def resize_view(self, size=None):
+    def resize_view(self, size=None, force=False):
         """Resize the display.
 
         If size is given (W x H) it is used; else use current size (if not set, default to 80x20.
         """
-        print("========= resize", size)
+        print("=++++++== resize", size)
         if size is None:
             size = self.display_size
+        #elif size == self.display_size and not force:
+        #    # nothing to do, really
+        #    return
         else:
             self.display_size = size
         cols, rows = size
@@ -258,36 +376,20 @@ class TextDisplay(QWidget):
         if self.cell_size is None:
             return
 
-        print("========== resize font size?", self.font, self.cell_size)
-        # margin = self.display.frameWidth() + 3
-        # view_width = math.ceil(char_width * cols + 2 * margin)
-        # view_height = math.ceil(line_height * rows + 2 * margin)
-
+        print("==++++++== resize font size?", self.font, self.cell_size)
+        # calculate widget desired size, update internal record, and call Qt magic to resize/redraw
         char_width, line_height = self.cell_size
         view_width = math.ceil(char_width * cols)
         view_height = math.ceil(line_height * rows)
-        print("======== full", view_width, view_height)
-        self.setFixedSize(view_width, view_height)
-        self.main_window.adjustSize()
+        self.widget_size = QSize(view_width, view_height)
+        print("==++++++== resize update a", self.widget_size)
+        if force:
+            self.updateGeometry()
+            self.main_window.adjustSize()
 
     def write_line(self, row, col, textinfo):
         """Write a line in the display."""
         self.lines.add(row, col, textinfo)
-        ## expand the textinfo so we have one format per character, to keep our logical grid
-        #expanded = []
-        #for text, fmt in textinfo:
-        #    expanded.extend((char, fmt) for char in text)
-
-        #print("============= write line row", row)
-        #prvline = self.logical_lines.setdefault(row, [])
-        #if col > len(prvline):
-        #    raise ValueError("Trying to write outside the line; needs to rethink model!!!")
-        #print("============= prev?", len(prvline))
-        #prvline[col: col + len(expanded)] = expanded
-        #print("============= prev!", len(prvline))
-        #print("============= prev=", repr("".join(text for text, fmt in prvline)))
-        ##self.paint_lines.add(row)
-        ##print("============= rows to repaint", sorted(self.paint_lines))
 
     def scroll(self, vertical, horizontal):
         """Scroll the grid."""
@@ -310,22 +412,25 @@ class TextDisplay(QWidget):
         print("========= new cursor pos", row, col)
         self.cursor_pos = (row, col)
 
-    def _paint_cursor_block(self, painter, start_x, start_y):
+    def _paint_cursor_block(self, attr_id, painter, start_x, start_y):
         """Draw a cursor as a block."""
         cell_width, cell_height = self.cell_size
-        print("============= cursor block (CAMBIAR COLOR)?", (
-            start_x, start_y, cell_width, cell_height))
-        painter.fillRect(
-            int(start_x), int(start_y), int(cell_width), int(cell_height), Qt.GlobalColor.blue)
+        rect = QRectF(start_x, start_y, cell_width, cell_height)
+        assert attr_id == 0  # means inverting color, which is what we're only doing here
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
+        painter.fillRect(rect, Qt.GlobalColor.white)
+        painter.restore()
 
-    def _paint_cursor_vertical(self, percentage, painter, start_x, start_y):
+    def _paint_cursor_vertical(self, attr_id, percentage, painter, start_x, start_y):
         """Draw a cursor as a block."""
         cell_width, cell_height = self.cell_size
-        print("============= cursor vertical (CAMBIAR COLOR)?", percentage, (
-            start_x, start_y, cell_width, cell_height))
-        painter.fillRect(
-            int(start_x), int(start_y),
-            int(cell_width * percentage / 100), int(cell_height), Qt.GlobalColor.blue)
+        rect = QRectF(start_x, start_y, cell_width * percentage / 100, cell_height)
+        assert attr_id == 0  # means inverting color, which is what we're only doing here
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
+        painter.fillRect(rect, Qt.GlobalColor.white)
+        painter.restore()
 
     def paintEvent(self, event):
         """Paint the widget."""
@@ -356,6 +461,7 @@ class TextDisplay(QWidget):
             complete_text = "".join(text for text, fmt in logical_line)
 
             print("================ paint", row, len(complete_text), repr(complete_text))
+            print("============== FULL W", QFontMetricsF(self.font).horizontalAdvance(complete_text))
             layout = QTextLayout(complete_text, self.font)
 
             # formats
@@ -405,7 +511,6 @@ class TextDisplay(QWidget):
             self.cursor_painter(painter, cursor_x, cursor_y)
 
         painter.end()
-        #self.paint_lines.clear()
 
     def change_mode(self, mode_info):
         """Change mode."""
@@ -449,9 +554,9 @@ class TextDisplay(QWidget):
         cursor_attr_id = mode_info.pop("attr_id", 0)
         print("========= CURSOR color", cursor_attr_id)
         if cursor_shape == "block":
-            self.cursor_painter = self._paint_cursor_block
+            self.cursor_painter = partial(self._paint_cursor_block, cursor_attr_id)
         elif cursor_shape == "vertical":
-            self.cursor_painter = functools.partial(self._paint_cursor_vertical, cursor_perc)
+            self.cursor_painter = partial(self._paint_cursor_vertical, cursor_attr_id, cursor_perc)
         else:
             # FIXME
             print("============== CURSOR forma!!!", cursor_shape, cursor_perc)
@@ -463,7 +568,13 @@ class TextDisplay(QWidget):
 class Vym(QMainWindow):
     def __init__(self, loop):
         super().__init__()
+        self._closing = 0
         self.nvim_manager = NvimManager(self)
+
+        # setup the Neovim interface
+        self.nvi = NvimInterface(loop, self.nvim_manager.notification_handler, self._quit_callback)
+        nvim_config = {"ext_linegrid": True}
+        loop.create_task(self.nvi.request(None, "nvim_ui_attach", 80, 20, nvim_config))
 
         self.current_display_size = None
         self.current_font = None
@@ -473,8 +584,9 @@ class Vym(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.layout = QVBoxLayout(self.central_widget)
 
-        self.display = TextDisplay(self, self.nvim_manager)
-        self.layout.addWidget(self.display)
+        self.display = TextDisplay(self, self.nvim_manager, loop)
+        self.display.setFocus()
+        self.layout.addWidget(self.display, stretch=1)
 
         # FIXME: dejar esto para entender que funciona
         self.button = QPushButton("Haz clic aquí", self)
@@ -485,26 +597,24 @@ class Vym(QMainWindow):
         self.button2.clicked.connect(lambda: asyncio.create_task(self.async_task()))
         self.layout.addWidget(self.button2)
 
-        # setup the Neovim interface
-        self.nvi = NvimInterface(loop, self.nvim_manager.notification_handler)
-        nvim_config = {"ext_linegrid": True}
-        loop.create_task(self.nvi.request(None, "nvim_ui_attach", 80, 20, nvim_config))
+        self.display._t()
+        self.adjustSize()  # FIXME
 
     def test_action(self):
         print("Botón de PyQt6 presionado")
 
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor("blue"))
-        fmt.setBackground(QColor("yellow"))
+        #fmt = QTextCharFormat()
+        #fmt.setForeground(QColor("blue"))
+        #fmt.setBackground(QColor("yellow"))
 
-        # hacks
-        self.display.lines[3] = (4, 0, [(" 0123456789" * 8, fmt)])
-        self.display.lines[5] = (5, 0, [(" Moño g 昔 ばなし CULO", fmt)])
+        ## hacks
+        #self.display.lines[3] = (4, 0, [(" 0123456789" * 8, fmt)])
+        #self.display.lines[5] = (5, 0, [(" Moño g 昔 ばなし CULO", fmt)])
 
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor("black"))
-        fmt.setBackground(QColor("white"))
-        self.display.lines[6] = (6, 0, [(" emoji 😆d", fmt)])
+        #fmt = QTextCharFormat()
+        #fmt.setForeground(QColor("black"))
+        #fmt.setBackground(QColor("white"))
+        #self.display.lines[6] = (6, 0, [(" emoji 😆d", fmt)])
 
     async def async_task(self):
         def f(result):
@@ -512,26 +622,46 @@ class Vym(QMainWindow):
 
         await self.nvi.request(f, "nvim_list_uis")
 
-    async def _send_key_to_nvim(self, key):
-        """FIXME."""
-        await self.nvi.request(None, "nvim_input", key)
+    async def _quit(self):
+        """Close the GUI after Neovim is down."""
+        logger.debug("Start shutdown, asking")
+        await self.nvi.quit()
+        self._closing = 2  # allows final close
+        logger.debug("Start shutdown, done")
+        self.close()
 
-    def keyPressEvent(self, event: QKeyEvent):
-        """Evita que PyQt6 capture el teclado, permitiendo que Neovim lo maneje por completo."""
-        event.ignore()  # FIXME: para qué?
-        key = event.text()  # FIXME: eso qué da, y que le podemos pasar a nvim?
-        print("\n========== Key", repr(key))
-        # FIXME: es raro; el Tab no se ve, y los modificadores a veces vienen o no
-        asyncio.create_task(self._send_key_to_nvim(key))
+    def _quit_callback(self):
+        """Close the GUI because of nvim interface request."""
+        if self._closing == 0:
+            # only if it was not initiated internally
+            logger.debug("Shutdown requested by interface")
+            self._closing = 2
+            self.close()
 
     def closeEvent(self, event):
-        """Cierra Neovim correctamente al cerrar la ventana."""
-        print("============ close??")
-        # FIXME: cerrar el proceso de nvim
-        # if self.nvim_process.state() == QProcess.ProcessState.Running:
-        #     self.nvim_process.terminate()
-        #     self.nvim_process.waitForFinished(3000)
-        # event.accept()
+        """Close Neovim and then let the rest to finish.
+
+        The event is ignored so the "real closing" is interrupted, which is triggered later
+        when Neovim is already down.
+        """
+        logger.debug("Close requested; current state %d", self._closing)
+        if self._closing == 0:
+            # start to close; ignore the event so GUI is still alive, but start internal procedures
+            self._closing = 1
+            event.ignore()
+            asyncio.create_task(self._quit())
+            return
+
+        if self._closing == 1:
+            # the event was received again in the middle of internal closing, keep ignoring it;
+            # FIXME: let's put a "timeout" here and only keep ignoring if timeout didn't happen
+            event.ignore()
+            return
+
+        # we're really done here, let the event propagate so
+        assert self._closing == 2
+        logger.debug("Bye")
+        event.accept()
 
     def change_mode(self, mode_info):
         """FIXME."""

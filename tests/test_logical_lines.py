@@ -3,6 +3,8 @@ import pytest
 
 from vym.logical_lines import LogicalLines
 
+MARK = object()
+
 
 def create_trivial_grid(*lines_content):
     """Create a trivial grid with some indicated lines content without specific formats."""
@@ -102,17 +104,65 @@ class TestAddingRows:
 class TestScrollingVertically:
 
     def test_negative_single(self):
-        """Should move bottom from 'c', creating a gap; from 'f' is untouched."""
+        """Should move down from 'c', creating a gap; from 'f' is untouched."""
         ll = create_trivial_grid(*"abcdefg")
         ll.scroll_vertical(top=2, bottom=5, delta=-1)
 
-        extracted = [ll.get(idx) for idx in range(7)]
+        extracted = [ll.get(idx, MARK) for idx in range(7)]
         assert extracted == [
             [("a", None)],
             [("b", None)],
-            None,
+            MARK,
             [("c", None)],
             [("d", None)],
+            [("f", None)],
+            [("g", None)],
+        ]
+
+    def test_negative_multiple(self):
+        """Moving down two lines."""
+        ll = create_trivial_grid(*"abcdefg")
+        ll.scroll_vertical(top=2, bottom=5, delta=-2)
+
+        extracted = [ll.get(idx, MARK) for idx in range(7)]
+        assert extracted == [
+            [("a", None)],
+            [("b", None)],
+            MARK,
+            MARK,
+            [("c", None)],
+            [("f", None)],
+            [("g", None)],
+        ]
+
+    def test_positive_single(self):
+        """Should move up from 'c', creating a gap at the end; from 'f' is untouched."""
+        ll = create_trivial_grid(*"abcdefg")
+        ll.scroll_vertical(top=2, bottom=5, delta=1)
+
+        extracted = [ll.get(idx, MARK) for idx in range(7)]
+        assert extracted == [
+            [("a", None)],
+            [("b", None)],
+            [("d", None)],
+            [("e", None)],
+            MARK,
+            [("f", None)],
+            [("g", None)],
+        ]
+
+    def test_positive_multiple(self):
+        """Moving up two lines."""
+        ll = create_trivial_grid(*"abcdefg")
+        ll.scroll_vertical(top=2, bottom=5, delta=2)
+
+        extracted = [ll.get(idx, MARK) for idx in range(7)]
+        assert extracted == [
+            [("a", None)],
+            [("b", None)],
+            [("e", None)],
+            MARK,
+            MARK,
             [("f", None)],
             [("g", None)],
         ]
