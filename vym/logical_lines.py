@@ -20,14 +20,18 @@ class LogicalLines:
         # expand the textinfo so we have one format per character, to keep our logical grid
         expanded = []
         for text, fmt in textinfo:
-            expanded.extend((char, fmt) for char in text)
+            if text == "":
+                # special "char" that comes after others to indicate those are width
+                expanded.append((None, fmt))
+            else:
+                expanded.extend((char, fmt) for char in text)
 
         print("============= write line row", row)
         prvline = self._lines.setdefault(row, [])
         if col > len(prvline):
             raise ValueError("Trying to write outside the line; needs to rethink model!!!")
         prvline[col: col + len(expanded)] = expanded
-        print("============= current", repr("".join(text for text, fmt in prvline)))
+        print("============= current", [char for char, fmt in prvline])
 
     def scroll_vertical(self, top, bottom, delta):
         """Scroll vertically some lines in the grid."""

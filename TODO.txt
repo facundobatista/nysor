@@ -1,7 +1,10 @@
 fase 1
+- soportar caracteres anchos!
+    ver ejwidth.py
 - basic interaction with mouse
 - que siempre queden con fondo OK las lineas
-- soportar caracteres anchos?
+- detalles!
+    - ver que pasa al cerrar el archivo con X-ventana cuando hay cambios
 - limpiar text view!!!
 - repensar que nvimanager llame directamnte al "display"
 - fixear / anotar los FIXME y XXXs

@@ -4,6 +4,8 @@ import asyncio
 import logging
 import math
 import sys
+import unicodedata
+from dataclasses import dataclass
 from typing import Any
 from functools import partial
 
@@ -15,10 +17,12 @@ from PyQt6.QtGui import (
     QFontMetricsF,
     QKeyEvent,
     QPainter,
-    QTextCharFormat,
-    QTextLayout,
+    QPainterPath,
+    QPen,
 )
 from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
+
+
 
 from vym.nvim_interface import NvimInterface
 from vym.logical_lines import LogicalLines
@@ -26,17 +30,48 @@ from vym.logical_lines import LogicalLines
 logging.basicConfig(
     format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s', datefmt='%H:%M:%S')
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 # FIXME: replace prints
 # FIXME: foffing?
 
 
-# conversion between the names used by Neovim to the styles defined in Qt6
+@dataclass
+class CharUnderline:
+    color: QColor
+    style: str  # "underline", "undercurl", "underdouble", "underdotted", "underdashed"
+
+
+@dataclass
+class CharFormat:
+    foreground: QColor
+    background: QColor
+    strikethrough: bool = False
+    italic: bool = False
+    bold: bool = False
+    underline: CharUnderline | None = None
+
+
+@dataclass
+class GridChar:
+    char: str
+    format: CharFormat
+
+
+@dataclass
+class FontSize:
+    """Hold information about cell and char inside it."""
+    width: float
+    height: float
+    ascent: float
+
+
+## conversion between the names used by Neovim to the styles defined in Qt6
 UNDERLINE_STYLES = [
-    ("underline", QTextCharFormat.UnderlineStyle.SingleUnderline),
-    ("undercurl", QTextCharFormat.UnderlineStyle.WaveUnderline),
-    ("underdouble", QTextCharFormat.UnderlineStyle.DashDotDotLine),  # not exactly "double" :/
-    ("underdotted", QTextCharFormat.UnderlineStyle.DotLine),
-    ("underdashed", QTextCharFormat.UnderlineStyle.DashUnderline),
+    "underline",
+    "undercurl",
+    "underdouble",
+    "underdotted",
+    "underdashed",
 ]
 
 # never ask to Neovim a grid smaller than these
@@ -235,14 +270,14 @@ class TextDisplay(QWidget):
         self.initial_resizing_done = False
 
         # some defaults
-        self.cell_size = None
+        self.font_size = None
         self.display_size = (80, 20)
         self.widget_size = QSize(100, 100)  # default valid pseudo-useful value
         self.set_font("Courier", 12)
 
         self.lines = {}  # real logical lines will be built automatically later
         self.cursor_pos = (0, 0)
-        self.cursor_painter = None
+        self.cursor_painter = lambda *a: None
         self.need_grid_clearing = True
 
         # get *all* keyboard events in this widget
@@ -265,9 +300,8 @@ class TextDisplay(QWidget):
         """Hook up in the event to allow informing Neovim of new window size."""
         super().resizeEvent(event)
         print("====++++++======= RESIZE -- TD", (self.width(), self.height()), event.oldSize(), event.size())
-        cell_width, cell_height = self.cell_size
-        cols = max(MIN_COLS_ROWS, int(self.width() / cell_width))
-        rows = max(MIN_COLS_ROWS, int(self.height() / cell_height))
+        cols = max(MIN_COLS_ROWS, int(self.width() / self.font_size.width))
+        rows = max(MIN_COLS_ROWS, int(self.height() / self.font_size.height))
 
         ## this verification and guardrail is to prevent an infinite loop of resizings when the
         ## GUI window is initially started and adjusted
@@ -347,13 +381,14 @@ class TextDisplay(QWidget):
         fm = QFontMetricsF(self.font)
         char_width = fm.horizontalAdvance("M")
         line_height = fm.height()
-        self.cell_size = (char_width, line_height)
+        self.font_size = FontSize(width=char_width, height=line_height, ascent=fm.ascent())
         print("========== FM! horiz advance", char_width)
+        print("========== FM! ascent", fm.ascent())
         print("========== FM! height", line_height)
         print("========== FM! bound rect", fm.boundingRect("█"))
         print("========== FM! size", fm.size(0, "█"))
         #br = fm.boundingRect("M")
-        #self.cell_size = (math.ceil(br.width()), math.ceil(br.height()))
+        #self.font_size = (math.ceil(br.width()), math.ceil(br.height()))
 
         self.resize_view(force=True)
 
@@ -373,14 +408,13 @@ class TextDisplay(QWidget):
         cols, rows = size
 
         # adjust display size for font, if we have it
-        if self.cell_size is None:
+        if self.font_size is None:
             return
 
-        print("==++++++== resize font size?", self.font, self.cell_size)
+        print("==++++++== resize font size?", self.font, self.font_size)
         # calculate widget desired size, update internal record, and call Qt magic to resize/redraw
-        char_width, line_height = self.cell_size
-        view_width = math.ceil(char_width * cols)
-        view_height = math.ceil(line_height * rows)
+        view_width = math.ceil(self.font_size.width * cols)
+        view_height = math.ceil(self.font_size.height * rows)
         self.widget_size = QSize(view_width, view_height)
         print("==++++++== resize update a", self.widget_size)
         if force:
@@ -409,106 +443,204 @@ class TextDisplay(QWidget):
 
     def set_cursor(self, row, col):
         """Set the cursor position in the display."""
-        print("========= new cursor pos", row, col)
+        print("==---======= new cursor pos", row, col)
         self.cursor_pos = (row, col)
 
-    def _paint_cursor_block(self, attr_id, painter, start_x, start_y):
+    def _paint_cursor_block(self, attr_id, painter, start_x, start_y, width):
         """Draw a cursor as a block."""
-        cell_width, cell_height = self.cell_size
-        rect = QRectF(start_x, start_y, cell_width, cell_height)
+        rect = QRectF(start_x, start_y, width, self.font_size.height)
         assert attr_id == 0  # means inverting color, which is what we're only doing here
         painter.save()
         painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
         painter.fillRect(rect, Qt.GlobalColor.white)
         painter.restore()
 
-    def _paint_cursor_vertical(self, attr_id, percentage, painter, start_x, start_y):
+    def _paint_cursor_vertical(self, attr_id, percentage, painter, start_x, start_y, width):
         """Draw a cursor as a block."""
-        cell_width, cell_height = self.cell_size
-        rect = QRectF(start_x, start_y, cell_width * percentage / 100, cell_height)
+        rect = QRectF(start_x, start_y, width * percentage / 100, self.font_size.height)
         assert attr_id == 0  # means inverting color, which is what we're only doing here
         painter.save()
         painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
         painter.fillRect(rect, Qt.GlobalColor.white)
         painter.restore()
+
+    def _draw_undercurl(self, painter, x, y, width, color):
+        """Draws a curled underline."""
+        # FIXME: improve drawing
+        path = QPainterPath()
+        amplitude = 1
+        period = 6
+        path.moveTo(x, y)
+        i = 0
+        while x + i < x + width:
+            cx1 = x + i + period / 2
+            cy1 = y + (amplitude if (i // period) % 2 == 0 else -amplitude)
+            path.lineTo(cx1, cy1)
+            i += period
+        painter.setPen(QPen(color, 1))
+        painter.drawPath(path)
+
+    def _get_drawing_widths(self, char):
+        """Define the horizontal positions.
+
+        Helper to switch between different alternatives; we may simplify this in the future
+
+        Returns the slot width and the horizontal shift to start drawing.
+        """
+        fm = QFontMetricsF(self.font)
+        char_width = fm.horizontalAdvance(char)
+        fix_size = None
+
+        # "unicode": one width or two, according to what Unicode says
+        #   Fullwidth (F) : 2
+        #   Halfwidth (H) : 1
+        #   Wide      (W) : 2
+        #   Narrow    (Na): 1
+        #   Ambiguous (A) : 1?
+        slot_width = self.font_size.width
+        shift = 0
+        if unicodedata.east_asian_width(char) in ("F", "W"):
+            slot_width *= 2
+            shift = (slot_width - char_width) / 2
+
+        # # "natural": let chars occupy whatever they need
+        # slot_width = char_width
+        # shift = 0
+
+        # # "expanded": each char will occupy one or two fixed slots, according to the real draw size
+        # slot_width = self.font_size.width
+        # shift = 0
+        # if char_width > slot_width:
+        #     slot_width *= 2
+        #     shift = (slot_width - char_width) / 2
+
+        # # "reduced": each char will occupy one slot, always
+        # slot_width = self.font_size.width
+        # shift = 0
+        # if char_width > slot_width:
+        #     fix_size = slot_width / char_width
+
+        return slot_width, shift, char_width, fix_size
 
     def paintEvent(self, event):
         """Paint the widget."""
         print("======= PAINT!")
         painter = QPainter(self)
-        painter.setFont(self.font)
+        painter.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
 
-        #if self.need_grid_clearing:
-        #    # special initial case to clear up the whole viewer
-        #    logger.debug("Initial clearing")
-        #    self.need_grid_clearing = False
-        #    print("============= CLEAR (really)")
-        #    painter.fillRect(self.rect(), Qt.GlobalColor.white)
+        cell_height = self.font_size.height
 
-        cell_width, cell_height = self.cell_size
+        # paint all backgrounds first!
         for row in range(self.display_size[1]):
-            orig_y = row * cell_height
-            x = 0  # all logical lines start at column 0
+            base_y = row * cell_height
+            base_x = 0
 
             logical_line = self.lines.get(row)
             if logical_line is None:
-                rect = QRectF(x, orig_y, self.width(), cell_height)
+                rect = QRectF(0, base_y, self.width(), cell_height)
+                # FIXME: this should NOT be white, what if user has different background?
                 painter.fillRect(rect, Qt.GlobalColor.white)
+                continue
+
+            for char, fmt in logical_line:
+                if char is None:
+                    continue
+
+                slot_width, _, _, _ = self._get_drawing_widths(char)
+                x = base_x
+                base_x += slot_width
+
+                rect = QRectF(x, base_y, math.ceil(slot_width), cell_height)
+                painter.fillRect(rect, fmt.background)
+
+        # the foregrounds
+        cursor_row, cursor_col = self.cursor_pos
+        regular_point_size = self.font.pointSizeF()
+        for row in range(self.display_size[1]):
+            base_y = row * cell_height
+            base_x = 0
+
+            logical_line = self.lines.get(row)
+            if logical_line is None:
                 continue
 
             # FIXME: some of all this should be cached in LogicalLine, no need to recreate
             # everything on each paint
-            complete_text = "".join(text for text, fmt in logical_line)
-
+            #complete_text = "".join(text for text, fmt in logical_line)
+            complete_text = [char for char, fmt in logical_line]
             print("================ paint", row, len(complete_text), repr(complete_text))
-            print("============== FULL W", QFontMetricsF(self.font).horizontalAdvance(complete_text))
-            layout = QTextLayout(complete_text, self.font)
 
-            # formats
-            all_fmt_ranges = []
-            for start, (char, fmt) in enumerate(logical_line):
-                fmt_range = QTextLayout.FormatRange()
-                fmt_range.start = start
-                fmt_range.length = 1
-                fmt_range.format = fmt
-                all_fmt_ranges.append(fmt_range)
-            layout.setFormats(all_fmt_ranges)
+            for col, (char, fmt) in enumerate(logical_line):
+                if char is None:
+                    continue
 
-            layout.beginLayout()
-            line = layout.createLine()
-            layout.endLayout()
+                # get the value for current x, and shift the base for next round
+                slot_width, horizontal_shift, char_width, fix_size = self._get_drawing_widths(char)
 
-            if line.isValid():
-                # extra y to accommodate base of the font to it's place
-                natural_height = line.naturalTextRect().height
-                delta_y = (line.height() - natural_height() - 1.2) * 2
-                line.setPosition(QPointF(0, delta_y))
+                # fuente
+                font = self.font  # FIXME??? QFont(self.font_family)
+                font.setItalic(fmt.italic)
+                font.setBold(fmt.bold)
+                font.setPointSizeF(regular_point_size)
+                if fix_size is not None:
+                    font.setPointSizeF(regular_point_size * fix_size)
+                painter.setFont(font)
 
-                # Recortamos lo que se desborda del alto deseado
-                rect = QRectF(0, orig_y, self.width(), cell_height - 1)
-                painter.save()
-                painter.setClipRect(rect)
-                layout.draw(painter, QPointF(x, orig_y))
-                painter.restore()
+                # foreground
+                painter.setPen(fmt.foreground)
+
+                text_x = base_x + horizontal_shift
+                text_y = base_y + (cell_height + self.font_size.ascent) / 2 - 2
+                painter.drawText(QPointF(text_x, text_y), char)
+
+                # strike through
+                if fmt.strikethrough:
+                    painter.setPen(fmt.foreground)
+                    strike_y = text_y - self.font_size.ascent / 3
+                    # FIXME: QRectF?
+                    painter.drawLine(int(text_x), int(strike_y), int(x + char_width), int(strike_y))
+
+                # underline
+                if fmt.underline:
+                    painter.setPen(QPen(fmt.underline.color))
+                    underline_y = base_y + cell_height - 3
+
+                    match fmt.underline.style:
+                        case "underline":
+                            painter.drawLine(base_x, underline_y, base_x + slot_width, underline_y)
+                        case "underdotted":
+                            pen = QPen(fmt.underline.color)
+                            pen.setStyle(Qt.PenStyle.DotLine)
+                            painter.setPen(pen)
+                            painter.drawLine(base_x, underline_y, base_x + slot_width, underline_y)
+                        case "underdashed":
+                            pen = QPen(fmt.underline.color)
+                            pen.setStyle(Qt.PenStyle.DashLine)
+                            painter.setPen(pen)
+                            painter.drawLine(base_x, underline_y, base_x + slot_width, underline_y)
+                        case "underdouble":
+                            painter.drawLine(
+                                base_x, underline_y - 1, base_x + slot_width, underline_y - 1)
+                            painter.drawLine(
+                                base_x, underline_y + 1, base_x + slot_width, underline_y + 1)
+                        case "undercurl":
+                            self._draw_undercurl(
+                                painter, base_x, underline_y, slot_width, fmt.underline.color)
+                        case _:
+                            raise ValueError(
+                                f"Invalid underline style: {fmt.underline.style!r}"
+                            )
 
                 # FIXME: remove blue points
                 painter.setPen(QColor(0, 0, 255))
-                painter.drawPoint(QPointF(x, orig_y))
+                painter.drawPoint(QPointF(base_x, base_y))
 
-            else:
-                logger.warning("Invalid display line: %d %d %s", row, logical_line)
+                # the cursor, if that is the position
+                if col == cursor_col and row == cursor_row:
+                    print("============== paint cursor; char, x, width", repr(char), base_x, slot_width)
+                    self.cursor_painter(painter, base_x, base_y, slot_width)
 
-        # paint the cursor if we can
-        cursor_row, cursor_col = self.cursor_pos
-        if self.cursor_painter is not None:
-            print("======== cursor paint?", cursor_row)
-            logical_line = self.lines.get(cursor_row) or []
-            fm = QFontMetricsF(self.font)  # FIXME instantiate once when font is changed?
-            after_text = "".join(text for text, fmt in logical_line[:cursor_col])
-            print("======== cursor text after?", repr(after_text))
-            cursor_x = fm.horizontalAdvance(after_text)
-            cursor_y = cursor_row * cell_height
-            self.cursor_painter(painter, cursor_x, cursor_y)
+                base_x += slot_width
 
         painter.end()
 
@@ -566,15 +698,17 @@ class TextDisplay(QWidget):
 
 
 class Vym(QMainWindow):
-    def __init__(self, loop):
+    def __init__(self, loop, nvim_exec_path):
         super().__init__()
+        logger.info("Starting Vym")
         self._closing = 0
         self.nvim_manager = NvimManager(self)
 
         # setup the Neovim interface
-        self.nvi = NvimInterface(loop, self.nvim_manager.notification_handler, self._quit_callback)
-        nvim_config = {"ext_linegrid": True}
-        loop.create_task(self.nvi.request(None, "nvim_ui_attach", 80, 20, nvim_config))
+        self.nvi = NvimInterface(
+            nvim_exec_path, loop, self.nvim_manager.notification_handler, self._quit_callback
+        )
+        loop.create_task(self.setup_nvim())
 
         self.current_display_size = None
         self.current_font = None
@@ -599,6 +733,23 @@ class Vym(QMainWindow):
 
         self.display._t()
         self.adjustSize()  # FIXME
+
+    async def setup_nvim(self):
+        """Set up Neovim."""
+        def show_api_info(response):
+            channel_id, api_metadata = response
+            version = api_metadata["version"]
+            print("======+++R 3", version)
+            major = version["major"]
+            minor = version["minor"]
+            patch = version["patch"]
+            logger.info("Neovim API info: version %s.%s.%s", major, minor, patch)
+            print("======+++R 4")
+
+        await self.nvi.request(show_api_info, "nvim_get_api_info")
+
+        nvim_config = {"ext_linegrid": True}
+        await self.nvi.request(None, "nvim_ui_attach", 80, 20, nvim_config)
 
     def test_action(self):
         print("Botón de PyQt6 presionado")
@@ -684,13 +835,14 @@ class Vym(QMainWindow):
         """Resize the display."""
         self.display.resize_view(size)
 
-    def _build_text_format(self, hl_id: int | None) -> QTextCharFormat:
+    def _build_text_format(self, hl_id: int | None) -> CharFormat:
         """Get the format for the text. If None, return default colors."""
         # the base is always the default color
         default_colors = self.nvim_manager.structs["default_colors"]
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(default_colors["foreground"]))
-        fmt.setBackground(QColor(default_colors["background"]))
+        fmt = CharFormat(
+            background=QColor(default_colors["background"]),
+            foreground=QColor(default_colors["foreground"]),
+        )
 
         # 'special' is color for underline, this is the default, may be modified later
         special_color = QColor(default_colors["special"])
@@ -699,25 +851,16 @@ class Vym(QMainWindow):
             hl_attrs = self.nvim_manager.structs["hl-attrs"]
             hl = hl_attrs[hl_id].copy()  # copy because will consume
 
-            # basic colors, that may be reversed
+            # basic set of attributes
+            attr_names = ("foreground", "background", "strikethrough", "italic", "bold")
+            for name in attr_names:
+                if name in hl:
+                    setattr(fmt, name, hl.pop(name))
+
+            # colors may be reversed
             reverse = hl.pop("reverse", False)
             if reverse:
-                color_meth = [("foreground", fmt.setBackground), ("background", fmt.setForeground)]
-            else:
-                color_meth = [("foreground", fmt.setForeground), ("background", fmt.setBackground)]
-            for color_indicator, setting_method in color_meth:
-                if color_indicator in hl:
-                    color = QColor(hl.pop(color_indicator))
-                    setting_method(color)
-
-            # other formats
-            if "strikethrough" in hl:
-                fmt.setFontStrikeOut(hl.pop("strikethrough"))
-            if "italic" in hl:
-                fmt.setFontItalic(hl.pop("italic"))
-            if "bold" in hl:
-                if hl.pop("bold"):
-                    fmt.setFontWeight(QFont.Weight.Bold)
+                fmt.foreground, fmt.background = fmt.background, fmt.foreground
 
             # XXX: we need to support 'url', but not sure the info that comes and how it spans
 
@@ -728,15 +871,13 @@ class Vym(QMainWindow):
             # all variations of underlining; note the 'for' continues to the end (instead of
             # breaking on first find) because we want to "consume" all possible flags
             underline_style = None
-            for nvim_name, qt_style in UNDERLINE_STYLES:
-                if hl.pop(nvim_name, False):
-                    underline_style = qt_style
+            for style in UNDERLINE_STYLES:
+                if hl.pop(style, False):
+                    underline_style = style
             if underline_style is not None:
                 if "special" in hl:
                     special_color = QColor(hl.pop("special"))
-                fmt.setFontUnderline(True)
-                fmt.setUnderlineStyle(underline_style)
-                fmt.setUnderlineColor(special_color)
+                fmt.underline = CharUnderline(color=special_color, style=underline_style)
 
             if hl:
                 logger.warning("Some text format remained unprocessed: %s", hl)
@@ -764,10 +905,6 @@ class Vym(QMainWindow):
                 case _:
                     raise ValueError(f"Wrong sequence format when writing to display: {item!r}")
 
-            if not text:
-                # some indications come empty (specially (only?) at the end of each sequence)
-                continue
-
             if hl_id is not None:
                 # transform Neovim highlight into Qt format, caching it
                 fmt = self.nvimhl_to_qtfmt.get(hl_id)
@@ -785,8 +922,14 @@ class Vym(QMainWindow):
 
 
 if __name__ == "__main__":
+    # FIXME: improve cmd line handlers
     if "-v" in sys.argv or "--verbose" in sys.argv:
-        logger.setLevel(logging.DEBUG)
+        logging.getLogger().setLevel(logging.DEBUG)  # FIXME: esto prende los logs de PyQt; avoid!
+    if "-t" in sys.argv or "--trace" in sys.argv:
+        logging.getLogger().setLevel(0)
+
+    # FIXME: receive this as a parameter
+    nvim_exec_path = "/home/facundo/sistema/nvim-0.11.1"
 
     app = qasync.QApplication(sys.argv)
 
@@ -797,7 +940,7 @@ if __name__ == "__main__":
     app_close_event = asyncio.Event()
     app.aboutToQuit.connect(app_close_event.set)
 
-    main_window = Vym(event_loop)
+    main_window = Vym(event_loop, nvim_exec_path)
     main_window.show()
 
     with event_loop:
