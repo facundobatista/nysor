@@ -1,3 +1,4 @@
+# FIXME: copyright notices in all files
 """Main program."""
 
 import asyncio
@@ -22,10 +23,8 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
 
-
-
 from vym.nvim_interface import NvimInterface
-from vym.logical_lines import LogicalLines
+from vym.logical_lines import LogicalLines, CharFormat, CharUnderline
 
 logging.basicConfig(
     format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s', datefmt='%H:%M:%S')
@@ -33,28 +32,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 # FIXME: replace prints
 # FIXME: foffing?
-
-
-@dataclass
-class CharUnderline:
-    color: QColor
-    style: str  # "underline", "undercurl", "underdouble", "underdotted", "underdashed"
-
-
-@dataclass
-class CharFormat:
-    foreground: QColor
-    background: QColor
-    strikethrough: bool = False
-    italic: bool = False
-    bold: bool = False
-    underline: CharUnderline | None = None
-
-
-@dataclass
-class GridChar:
-    char: str
-    format: CharFormat
 
 
 @dataclass
@@ -275,7 +252,7 @@ class TextDisplay(QWidget):
         self.widget_size = QSize(100, 100)  # default valid pseudo-useful value
         self.set_font("Courier", 12)
 
-        self.lines = {}  # real logical lines will be built automatically later
+        self.lines = LogicalLines.empty()
         self.cursor_pos = (0, 0)
         self.cursor_painter = lambda *a: None
         self.need_grid_clearing = True
@@ -358,6 +335,7 @@ class TextDisplay(QWidget):
         """Build an empty logical lines."""
         default_fmt = self.main_window._build_text_format(None)
         cols, rows = self.display_size
+        print("============= BUILD!")
         return LogicalLines(rows, cols, default_fmt)
 
     def clear(self):
@@ -423,6 +401,7 @@ class TextDisplay(QWidget):
 
     def write_line(self, row, col, textinfo):
         """Write a line in the display."""
+        print("============ LLXXX??", self.lines)
         self.lines.add(row, col, textinfo)
 
     def scroll(self, vertical, horizontal):
@@ -489,7 +468,6 @@ class TextDisplay(QWidget):
         """
         fm = QFontMetricsF(self.font)
         char_width = fm.horizontalAdvance(char)
-        fix_size = None
 
         # "unicode": one width or two, according to what Unicode says
         #   Fullwidth (F) : 2
@@ -503,24 +481,7 @@ class TextDisplay(QWidget):
             slot_width *= 2
             shift = (slot_width - char_width) / 2
 
-        # # "natural": let chars occupy whatever they need
-        # slot_width = char_width
-        # shift = 0
-
-        # # "expanded": each char will occupy one or two fixed slots, according to the real draw size
-        # slot_width = self.font_size.width
-        # shift = 0
-        # if char_width > slot_width:
-        #     slot_width *= 2
-        #     shift = (slot_width - char_width) / 2
-
-        # # "reduced": each char will occupy one slot, always
-        # slot_width = self.font_size.width
-        # shift = 0
-        # if char_width > slot_width:
-        #     fix_size = slot_width / char_width
-
-        return slot_width, shift, char_width, fix_size
+        return slot_width, shift, char_width
 
     def paintEvent(self, event):
         """Paint the widget."""
@@ -542,20 +503,19 @@ class TextDisplay(QWidget):
                 painter.fillRect(rect, Qt.GlobalColor.white)
                 continue
 
-            for char, fmt in logical_line:
-                if char is None:
+            for logical_char in logical_line:
+                if logical_char.char is None:
                     continue
 
-                slot_width, _, _, _ = self._get_drawing_widths(char)
+                slot_width, _, _ = self._get_drawing_widths(logical_char.char)
                 x = base_x
                 base_x += slot_width
 
                 rect = QRectF(x, base_y, math.ceil(slot_width), cell_height)
-                painter.fillRect(rect, fmt.background)
+                painter.fillRect(rect, logical_char.format.background)
 
         # the foregrounds
         cursor_row, cursor_col = self.cursor_pos
-        regular_point_size = self.font.pointSizeF()
         for row in range(self.display_size[1]):
             base_y = row * cell_height
             base_x = 0
@@ -566,55 +526,51 @@ class TextDisplay(QWidget):
 
             # FIXME: some of all this should be cached in LogicalLine, no need to recreate
             # everything on each paint
-            #complete_text = "".join(text for text, fmt in logical_line)
-            complete_text = [char for char, fmt in logical_line]
+            complete_text = [lc.char for lc in logical_line]
             print("================ paint", row, len(complete_text), repr(complete_text))
 
-            for col, (char, fmt) in enumerate(logical_line):
-                if char is None:
+            for col, logical_char in enumerate(logical_line):
+                if logical_char.char is None:
                     continue
 
                 # get the value for current x, and shift the base for next round
-                slot_width, horizontal_shift, char_width, fix_size = self._get_drawing_widths(char)
+                slot_width, horizontal_shift, char_width = self._get_drawing_widths(logical_char.char)
 
                 # fuente
                 font = self.font  # FIXME??? QFont(self.font_family)
-                font.setItalic(fmt.italic)
-                font.setBold(fmt.bold)
-                font.setPointSizeF(regular_point_size)
-                if fix_size is not None:
-                    font.setPointSizeF(regular_point_size * fix_size)
+                font.setItalic(logical_char.format.italic)
+                font.setBold(logical_char.format.bold)
                 painter.setFont(font)
 
                 # foreground
-                painter.setPen(fmt.foreground)
+                painter.setPen(logical_char.format.foreground)
 
                 text_x = base_x + horizontal_shift
                 text_y = base_y + (cell_height + self.font_size.ascent) / 2 - 2
-                painter.drawText(QPointF(text_x, text_y), char)
+                painter.drawText(QPointF(text_x, text_y), logical_char.char)
 
                 # strike through
-                if fmt.strikethrough:
-                    painter.setPen(fmt.foreground)
+                if logical_char.format.strikethrough:
+                    painter.setPen(logical_char.format.foreground)
                     strike_y = text_y - self.font_size.ascent / 3
                     # FIXME: QRectF?
                     painter.drawLine(int(text_x), int(strike_y), int(x + char_width), int(strike_y))
 
                 # underline
-                if fmt.underline:
-                    painter.setPen(QPen(fmt.underline.color))
+                if logical_char.format.underline:
+                    painter.setPen(QPen(logical_char.format.underline.color))
                     underline_y = base_y + cell_height - 3
 
-                    match fmt.underline.style:
+                    match logical_char.format.underline.style:
                         case "underline":
                             painter.drawLine(base_x, underline_y, base_x + slot_width, underline_y)
                         case "underdotted":
-                            pen = QPen(fmt.underline.color)
+                            pen = QPen(logical_char.format.underline.color)
                             pen.setStyle(Qt.PenStyle.DotLine)
                             painter.setPen(pen)
                             painter.drawLine(base_x, underline_y, base_x + slot_width, underline_y)
                         case "underdashed":
-                            pen = QPen(fmt.underline.color)
+                            pen = QPen(logical_char.format.underline.color)
                             pen.setStyle(Qt.PenStyle.DashLine)
                             painter.setPen(pen)
                             painter.drawLine(base_x, underline_y, base_x + slot_width, underline_y)
@@ -625,10 +581,10 @@ class TextDisplay(QWidget):
                                 base_x, underline_y + 1, base_x + slot_width, underline_y + 1)
                         case "undercurl":
                             self._draw_undercurl(
-                                painter, base_x, underline_y, slot_width, fmt.underline.color)
+                                painter, base_x, underline_y, slot_width, logical_char.format.underline.color)
                         case _:
                             raise ValueError(
-                                f"Invalid underline style: {fmt.underline.style!r}"
+                                f"Invalid underline style: {logical_char.format.underline.style!r}"
                             )
 
                 # FIXME: remove blue points
@@ -637,7 +593,7 @@ class TextDisplay(QWidget):
 
                 # the cursor, if that is the position
                 if col == cursor_col and row == cursor_row:
-                    print("============== paint cursor; char, x, width", repr(char), base_x, slot_width)
+                    print("============== paint cursor; char, x, width", repr(logical_char.char), base_x, slot_width)
                     self.cursor_painter(painter, base_x, base_y, slot_width)
 
                 base_x += slot_width
