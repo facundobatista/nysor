@@ -5,7 +5,6 @@ import asyncio
 import logging
 import math
 import sys
-import unicodedata
 from dataclasses import dataclass
 from typing import Any
 from functools import partial
@@ -26,9 +25,11 @@ from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
 from vym.nvim_interface import NvimInterface
 from vym.logical_lines import LogicalLines, CharFormat, CharUnderline
 
+# FIXME: isolate some of this, includeing setup in nviminterace and below because of cmd line to a separate module
 logging.basicConfig(
-    format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s', datefmt='%H:%M:%S')
+    format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s', datefmt='%H:%M:%S', stream=sys.stdout)
 logger = logging.getLogger(__name__)
+print("=======++ ++====== MAIN", __name__)
 logger.setLevel(logging.INFO)
 # FIXME: replace prints
 # FIXME: foffing?
@@ -239,6 +240,10 @@ class NvimManager:
 
 
 class TextDisplay(QWidget):
+
+    # cache to hold chars drawing widths; cleaned when font changes
+    _char_drawing_widths_cache = {}
+
     def __init__(self, main_window, nvim_manager, loop):
         super().__init__()
         self.main_window = main_window
@@ -259,7 +264,6 @@ class TextDisplay(QWidget):
 
         # get *all* keyboard events in this widget
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self._t()
 
     def focusNextPrevChild(self, next):
         """Do not allow to "navigate" widgets out of here."""
@@ -269,9 +273,6 @@ class TextDisplay(QWidget):
         """Provide the desired size for the widget."""
         print("=++++++===== hint!", self.widget_size)
         return self.widget_size
-
-    def _t(self):
-        print("====++++++======= _TT")
 
     def resizeEvent(self, event):
         """Hook up in the event to allow informing Neovim of new window size."""
@@ -355,6 +356,9 @@ class TextDisplay(QWidget):
         # try to set the real size, however it may not work in all systems
         self.font.setPointSizeF(size)
 
+        # clear the cache for the drawing widths
+        self._char_drawing_widths_cache.clear()
+
         # store font sizes
         fm = QFontMetricsF(self.font)
         char_width = fm.horizontalAdvance("M")
@@ -401,7 +405,6 @@ class TextDisplay(QWidget):
 
     def write_line(self, row, col, textinfo):
         """Write a line in the display."""
-        print("============ LLXXX??", self.lines)
         self.lines.add(row, col, textinfo)
 
     def scroll(self, vertical, horizontal):
@@ -459,29 +462,32 @@ class TextDisplay(QWidget):
         painter.setPen(QPen(color, 1))
         painter.drawPath(path)
 
-    def _get_drawing_widths(self, char):
-        """Define the horizontal positions.
+    def _get_drawing_widths(self, logical_char):
+        """Define the values for accommodating chars in the line.
 
-        Helper to switch between different alternatives; we may simplify this in the future
+        This is cached per char; note this cache is cleaned when font changes.
 
-        Returns the slot width and the horizontal shift to start drawing.
+        Returns the slot and char widths, and the horizontal shift to start drawing.
         """
-        fm = QFontMetricsF(self.font)
-        char_width = fm.horizontalAdvance(char)
+        try:
+            return self._char_drawing_widths_cache[logical_char]
+        except KeyError:
+            # not in the cache: calculate, store, and return values
+            pass
 
-        # "unicode": one width or two, according to what Unicode says
-        #   Fullwidth (F) : 2
-        #   Halfwidth (H) : 1
-        #   Wide      (W) : 2
-        #   Narrow    (Na): 1
-        #   Ambiguous (A) : 1?
+        print("===========++GGG", logical_char)
+        fm = QFontMetricsF(self.font)
+        char_width = fm.horizontalAdvance(logical_char.char)
+
         slot_width = self.font_size.width
         shift = 0
-        if unicodedata.east_asian_width(char) in ("F", "W"):
+        if logical_char.is_wide:
             slot_width *= 2
             shift = (slot_width - char_width) / 2
 
-        return slot_width, shift, char_width
+        values = slot_width, shift, char_width
+        self._char_drawing_widths_cache[logical_char] = values
+        return values
 
     def paintEvent(self, event):
         """Paint the widget."""
@@ -504,10 +510,10 @@ class TextDisplay(QWidget):
                 continue
 
             for logical_char in logical_line:
-                if logical_char.char is None:
+                if logical_char is None:
                     continue
 
-                slot_width, _, _ = self._get_drawing_widths(logical_char.char)
+                slot_width, _, _ = self._get_drawing_widths(logical_char)
                 x = base_x
                 base_x += slot_width
 
@@ -526,15 +532,15 @@ class TextDisplay(QWidget):
 
             # FIXME: some of all this should be cached in LogicalLine, no need to recreate
             # everything on each paint
-            complete_text = [lc.char for lc in logical_line]
+            complete_text = [lc and (lc.char * 2 if lc.is_wide else lc.char) for lc in logical_line]
             print("================ paint", row, len(complete_text), repr(complete_text))
 
             for col, logical_char in enumerate(logical_line):
-                if logical_char.char is None:
+                if logical_char is None:
                     continue
 
                 # get the value for current x, and shift the base for next round
-                slot_width, horizontal_shift, char_width = self._get_drawing_widths(logical_char.char)
+                slot_width, horizontal_shift, char_width = self._get_drawing_widths(logical_char)
 
                 # fuente
                 font = self.font  # FIXME??? QFont(self.font_family)
@@ -687,7 +693,6 @@ class Vym(QMainWindow):
         self.button2.clicked.connect(lambda: asyncio.create_task(self.async_task()))
         self.layout.addWidget(self.button2)
 
-        self.display._t()
         self.adjustSize()  # FIXME
 
     async def setup_nvim(self):
@@ -852,10 +857,16 @@ class Vym(QMainWindow):
         fmt = self._build_text_format(None)
         for item in sequence:
             match item:
+                case ['']:
+                    # special case to indicate that the previous char is width
+                    text = None
                 case [text]:
                     hl_id = None
                 case [text, hl_id]:
                     pass
+                case [' ', 0, 0]:
+                    # looks like used at the end of each sequence; looks not useful
+                    continue
                 case [text, hl_id, repeat]:
                     text = text * repeat
                 case _:
@@ -877,12 +888,13 @@ class Vym(QMainWindow):
         self.display.flush()
 
 
-if __name__ == "__main__":
+def main():
+    """Main entry point."""
     # FIXME: improve cmd line handlers
     if "-v" in sys.argv or "--verbose" in sys.argv:
-        logging.getLogger().setLevel(logging.DEBUG)  # FIXME: esto prende los logs de PyQt; avoid!
+        logging.getLogger("vym").setLevel(logging.DEBUG)
     if "-t" in sys.argv or "--trace" in sys.argv:
-        logging.getLogger().setLevel(0)
+        logging.getLogger("vym").setLevel(5)
 
     # FIXME: receive this as a parameter
     nvim_exec_path = "/home/facundo/sistema/nvim-0.11.1"

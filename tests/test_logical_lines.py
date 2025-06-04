@@ -3,8 +3,6 @@ import pytest
 
 from vym.logical_lines import LogicalLines, LogicalChar
 
-MARK = object()
-
 
 def create_trivial_grid(*lines_content):
     """Create a trivial grid with some indicated lines content without specific formats."""
@@ -37,12 +35,13 @@ class TestBasic:
         assert line is None
 
         line = ll.get(1)
-        p1, p2, p3, p4, p5 = line
-        assert p1 == LogicalChar("f", "fmt1")
-        assert p2 == LogicalChar("o", "fmt1")
-        assert p3 == LogicalChar("o", "fmt1")
-        assert p4 == LogicalChar(" ", "fmt_default")
-        assert p5 == LogicalChar(" ", "fmt_default")
+        assert line == [
+            LogicalChar("f", "fmt1"),
+            LogicalChar("o", "fmt1"),
+            LogicalChar("o", "fmt1"),
+            LogicalChar(" ", "fmt_default"),
+            LogicalChar(" ", "fmt_default"),
+        ]
 
     def test_single_line_complex_textinfo(self):
         """Add content with complex textinfo."""
@@ -50,10 +49,33 @@ class TestBasic:
         ll.add(1, 0, [("foo", "fmt1"), ("X", "fmt2"), ("extra", "fmt1")])
 
         line = ll.get(1)
-        assert [lc.char for lc in line] == ["f", "o", "o", "X", "e", "x", "t", "r", "a", " "]
-        assert [lc.format for lc in line] == (
-            ["fmt1"] * 3 + ["fmt2"] + ["fmt1"] * 5 + ["fmt_default"]
-        )
+        assert line == [
+            LogicalChar("f", "fmt1"),
+            LogicalChar("o", "fmt1"),
+            LogicalChar("o", "fmt1"),
+            LogicalChar("X", "fmt2"),
+            LogicalChar("e", "fmt1"),
+            LogicalChar("x", "fmt1"),
+            LogicalChar("t", "fmt1"),
+            LogicalChar("r", "fmt1"),
+            LogicalChar("a", "fmt1"),
+            LogicalChar(" ", "fmt_default"),
+        ]
+
+    def test_wide_character(self):
+        """The special char is acknowledged to mark a wide character."""
+        ll = LogicalLines(2, 6, "fmt_default")
+        ll.add(1, 0, [("xy", "fmt1"), ("W", "fmt2"), (None, "fmt2"), ("z", "fmt3")])
+
+        line = ll.get(1)
+        assert line == [
+            LogicalChar("x", "fmt1"),
+            LogicalChar("y", "fmt1"),
+            LogicalChar("W", "fmt2", is_wide=True),
+            None,
+            LogicalChar("z", "fmt3"),
+            LogicalChar(" ", "fmt_default"),
+        ]
 
 
 class TestAddingRows:
@@ -116,11 +138,11 @@ class TestScrollingVertically:
         ll = create_trivial_grid(*"abcdefg")
         ll.scroll_vertical(top=2, bottom=5, delta=-1)
 
-        extracted = [ll.get(idx, MARK) for idx in range(7)]
+        extracted = [ll.get(idx) for idx in range(7)]
         assert extracted == [
             [LogicalChar("a", None)],
             [LogicalChar("b", None)],
-            MARK,
+            None,
             [LogicalChar("c", None)],
             [LogicalChar("d", None)],
             [LogicalChar("f", None)],
@@ -132,12 +154,12 @@ class TestScrollingVertically:
         ll = create_trivial_grid(*"abcdefg")
         ll.scroll_vertical(top=2, bottom=5, delta=-2)
 
-        extracted = [ll.get(idx, MARK) for idx in range(7)]
+        extracted = [ll.get(idx) for idx in range(7)]
         assert extracted == [
             [LogicalChar("a", None)],
             [LogicalChar("b", None)],
-            MARK,
-            MARK,
+            None,
+            None,
             [LogicalChar("c", None)],
             [LogicalChar("f", None)],
             [LogicalChar("g", None)],
@@ -148,13 +170,13 @@ class TestScrollingVertically:
         ll = create_trivial_grid(*"abcdefg")
         ll.scroll_vertical(top=2, bottom=5, delta=1)
 
-        extracted = [ll.get(idx, MARK) for idx in range(7)]
+        extracted = [ll.get(idx) for idx in range(7)]
         assert extracted == [
             [LogicalChar("a", None)],
             [LogicalChar("b", None)],
             [LogicalChar("d", None)],
             [LogicalChar("e", None)],
-            MARK,
+            None,
             [LogicalChar("f", None)],
             [LogicalChar("g", None)],
         ]
@@ -164,13 +186,73 @@ class TestScrollingVertically:
         ll = create_trivial_grid(*"abcdefg")
         ll.scroll_vertical(top=2, bottom=5, delta=2)
 
-        extracted = [ll.get(idx, MARK) for idx in range(7)]
+        extracted = [ll.get(idx) for idx in range(7)]
         assert extracted == [
             [LogicalChar("a", None)],
             [LogicalChar("b", None)],
             [LogicalChar("e", None)],
-            MARK,
-            MARK,
+            None,
+            None,
             [LogicalChar("f", None)],
             [LogicalChar("g", None)],
         ]
+
+    def test_side_effect_add_missing(self):
+        """Content may be added to the created-gap-line."""
+        ll = create_trivial_grid(*"abcdef")
+        ll.scroll_vertical(top=1, bottom=3, delta=1)
+
+        extracted = [ll.get(idx) for idx in range(4)]
+        assert extracted == [
+            [LogicalChar("a", None)],
+            [LogicalChar("c", None)],
+            None,
+            [LogicalChar("d", None)],
+        ]
+
+        # this should be ok!
+        ll.add(2, 0, [("foo", "fmt1")])
+
+        extracted = [ll.get(idx) for idx in range(4)]
+        assert extracted == [
+            [LogicalChar("a", None)],
+            [LogicalChar("c", None)],
+            [LogicalChar("f", "fmt1"), LogicalChar("o", "fmt1"), LogicalChar("o", "fmt1")],
+            [LogicalChar("d", None)],
+        ]
+
+
+class TestLogicalChar:
+
+    def test_simple(self):
+        """Basic usage.."""
+        lc = LogicalChar("x", "fmt")
+        assert lc.char == "x"
+        assert lc.format == "fmt"
+        assert lc.is_wide is False
+
+        lc.is_wide = True
+        assert lc.is_wide is True
+
+        lc = LogicalChar("x", "fmt", is_wide=True)
+        assert lc.is_wide is True
+
+    def test_dictkey_ok(self):
+        """Can be using in a dict using char and width."""
+        d = {}
+        lc = LogicalChar("x", "fmt")
+        d[lc] = 3
+        assert d[lc] == 3
+
+        lc = LogicalChar("x", "fmt", is_wide=True)
+        assert lc not in d
+
+    def test_dictkey_not_format(self):
+        """The format is not involved when used in a dict key."""
+        d = {}
+        lc = LogicalChar("x", "fmt1")
+        d[lc] = 3
+        assert d[lc] == 3
+
+        lc = LogicalChar("x", "fmt2")
+        assert d[lc] == 3

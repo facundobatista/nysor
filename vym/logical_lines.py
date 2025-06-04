@@ -30,6 +30,12 @@ class LogicalChar:
     format: CharFormat
     is_wide: bool = False
 
+    def __hash__(self):
+        return hash((self.char, self.is_wide))
+
+    def __eq__(self, other):
+        return (self.char, self.is_wide) == (other.char, other.is_wide)
+
 
 class LogicalLines:
     """Hold the lines to show in the grid."""
@@ -43,18 +49,21 @@ class LogicalLines:
     def empty(cls):
         return cls(0, 0, None)
 
-    def get(self, row, default=None):
+    def get(self, row):
         """Return the logical line for the indicated row."""
-        return self._lines.get(row, default)
+        return self._lines.get(row)
 
     def add(self, row, col, textinfo):
         """Add text info to the grid."""
         # expand the textinfo so we have one format per character, to keep our logical grid
         expanded = []
         for text, fmt in textinfo:
-            if text == "":
-                # special "char" that comes after others to indicate those are width
-                expanded.append(LogicalChar(None, fmt))
+            if text is None:
+                # special "char" that comes after others to indicate those are width: we flag
+                # the previous item and keep the position with None for the slice assignment
+                # below to work correctly
+                expanded[-1].is_wide = True
+                expanded.append(None)
             else:
                 expanded.extend(LogicalChar(char, fmt) for char in text)
 
@@ -65,7 +74,8 @@ class LogicalLines:
         if col > len(prvline):
             raise ValueError("Trying to write outside the line; needs to rethink model!!!")
         prvline[col: col + len(expanded)] = expanded
-        print("============= current", [lc.char for lc in prvline])
+        print("============= current", [
+            lc and (lc.char * 2 if lc.is_wide else lc.char) for lc in prvline])
 
     def scroll_vertical(self, top, bottom, delta):
         """Scroll vertically some lines in the grid."""
@@ -76,28 +86,17 @@ class LogicalLines:
         if delta > 0:
             # goes up; move N lines up and then remove "hole"
             for idx in range(top + delta, bottom):
-                print("======= + moving", idx)
                 self._lines[idx - delta] = self._lines[idx]
             for idx in range(bottom - delta, bottom):
-                print("======= + killing", idx)
                 del self._lines[idx]
 
         elif delta < 0:
             # goes down; move N lines down and then remove "hole"
             for idx in reversed(range(top, bottom + delta)):
-                print("======= - moving", idx)
                 self._lines[idx - delta] = self._lines[idx]
             for idx in range(top, top - delta):
-                print("======= - killing", idx)
                 del self._lines[idx]
 
         else:
             logger.warning("Called scroll vertical with delta=0, shouldn't happen")
             return
-
-        print("========== new logical?")
-        for i in range(25):
-            xxx = self._lines.get(i)
-            if xxx is not None:
-                xxx = "".join(lc.char for lc in xxx)
-            print("========== x", i, repr(xxx))
