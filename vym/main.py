@@ -22,6 +22,8 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
 
+
+
 from vym.nvim_interface import NvimInterface
 from vym.logical_lines import LogicalLines, CharFormat, CharUnderline
 
@@ -85,6 +87,9 @@ QT_NVIM_KEYS_MAP = {
     Qt.Key.Key_F11: "F11",
     Qt.Key.Key_F12: "F12",
 }
+
+# Handier
+MouseButton = Qt.MouseButton
 
 
 class NvimManager:
@@ -239,28 +244,13 @@ class NvimManager:
         """Ignoring this, it's not documented, and it looks it's not useful for us."""
 
 
-class TextDisplay(QWidget):
+class BaseDisplay(QWidget):
+    """Base widget to isolate as much as possible Qt itself from the Text handling."""
 
-    # cache to hold chars drawing widths; cleaned when font changes
-    _char_drawing_widths_cache = {}
-
-    def __init__(self, main_window, nvim_manager, loop):
+    def __init__(self):
         super().__init__()
-        self.main_window = main_window
-        self.nvim_manager = nvim_manager
-        self.loop = loop  # FIXME: this will go away eventually when "request" can be done easily
-        self.initial_resizing_done = False
-
-        # some defaults
-        self.font_size = None
-        self.display_size = (80, 20)
         self.widget_size = QSize(100, 100)  # default valid pseudo-useful value
-        self.set_font("Courier", 12)
-
-        self.lines = LogicalLines.empty()
-        self.cursor_pos = (0, 0)
-        self.cursor_painter = lambda *a: None
-        self.need_grid_clearing = True
+        self.setMouseTracking(True)
 
         # get *all* keyboard events in this widget
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -275,9 +265,233 @@ class TextDisplay(QWidget):
         return self.widget_size
 
     def resizeEvent(self, event):
-        """Hook up in the event to allow informing Neovim of new window size."""
+        """Hook up in the event to trigger internal resizing."""
         super().resizeEvent(event)
         print("====++++++======= RESIZE -- TD", (self.width(), self.height()), event.oldSize(), event.size())
+        self.window_resize()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        """Get all keyboard events."""
+        print("\n========== Key", repr(event.text()), hex(event.key()), repr(event.modifiers()))
+        key_text = event.text()
+        key = event.key()
+        modifiers = event.modifiers()
+        self.handle_keyboard(key_text, key, modifiers)
+
+    def paintEvent(self, event):
+        """Paint the widget."""
+        print("======= PAINT!")
+        painter = QPainter(self)
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
+        )
+        self.paint(painter)
+        painter.end()
+
+    def mousePressEvent(self, event):
+        """A button mouse was pressed."""
+        #self.send_mouse_event(event, "press")
+
+        button = event.button()
+        if button is MouseButton.RightButton:
+            print("============ MOUSE press right XXX")  # FIXME : "right",
+            return
+
+        if button is MouseButton.MiddleButton:
+            print("============ MOUSE press middle XXX")  # FIXME : "middle",
+            return
+
+        # default as mouses can have a ton of buttons
+        if button is not MouseButton.LeftButton:
+            logger.debug("Unknown pressed button: %r", button)
+        print("============ MOUSE press left")
+        button_name = "left"
+        action = "press"
+        modifier = self.get_modifier(event)
+        grid = 0  # FIXME: may change when multi-edit?
+
+        pos = event.position()
+        row, col = self._get_grid_cell(pos.x(), pos.y())
+        #    self.nvim.nvim_input_mouse(button, action, modifier, 0, int(row), int(col))
+        self.loop.create_task(
+            self.main_window.nvi.request(
+                None, "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            )
+        )
+
+
+# {button} Mouse button: one of "left", "right", "middle", "wheel", "move", "x1", "x2".
+# {action} For ordinary buttons, one of "press", "drag", "release".
+# {modifier} String of modifiers each represented by a single char. The same specifiers are used as for a key press, except that the "-" separator is optional, so "C-A-", "c-a" and "CA" can all be used to specify Ctrl+Alt+click.
+# {grid} Grid number if the client uses ui-multigrid, else 0.
+# {row} Mouse row-position (zero-based, like redraw events)
+# {col} Mouse column-position (zero-based, like redraw events)
+
+    def mouseReleaseEvent(self, event):
+        """A button mouse was released."""
+        button = event.button()
+        if button is MouseButton.RightButton:
+            print("============ MOUSE release right XXX")  # FIXME : "right",
+            return
+
+        if button is MouseButton.MiddleButton:
+            print("============ MOUSE release middle XXX")  # FIXME : "middle",
+            return
+
+        # default as mouses can have a ton of buttons
+        if button is not MouseButton.LeftButton:
+            logger.debug("Unknown released button: %r", button)
+        print("============ MOUSE release left")
+        button_name = "left"
+        action = "release"
+        modifier = self.get_modifier(event)
+        grid = 0  # FIXME: may change when multi-edit?
+
+        pos = event.position()
+        row, col = self._get_grid_cell(pos.x(), pos.y())
+        #    self.nvim.nvim_input_mouse(button, action, modifier, 0, int(row), int(col))
+        self.loop.create_task(
+            self.main_window.nvi.request(
+                None, "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            )
+        )
+
+        def cback(*a, **k):
+            print("========= MOUSE cback", a, k)
+
+        self.loop.create_task(
+            self.main_window.nvi.request(cback, "nvim_call_function", "getpos", ["'<"])
+        )
+
+        self.loop.create_task(
+            self.main_window.nvi.request(cback, "nvim_call_function", "getpos", ["'>"])
+        )
+
+#start = rpc_call(sock, msgid, "nvim_call_function", ["getpos", ["'<"]])[3]
+#end = rpc_call(sock, msgid, "nvim_call_function", ["getpos", ["'>"]])[3]
+#
+#start_line, start_col = start[1] - 1, start[2] - 1
+#end_line, end_col = end[1] - 1, end[2] - 1
+#
+## Paso 2: getline(start_line, end_line)
+#lines = rpc_call(sock, msgid, "nvim_buf_get_lines", [0, start_line, end_line + 1, False])[3]
+#msgid += 1
+#
+## Paso 3: recortar
+#if start_line == end_line:
+#    lines = [lines[0][start_col:end_col + 1]]
+#else:
+#    lines[0] = lines[0][start_col:]
+#    lines[-1] = lines[-1][:end_col + 1]
+#
+## Paso 4: setreg("+", texto)
+#text = "\n".join(lines)
+#rpc_call(sock, msgid, "nvim_call_function", ["setreg", ["+", text]])
+
+
+
+
+    def _get_grid_cell(self, x, y):
+        """Return grid's row and column from pixels x and y."""
+        col = int(x / self.font_size.width)
+        row = int(y / self.font_size.height)
+        return row, col
+
+    def mouseMoveEvent(self, event):
+        """Mouse is moving; we only care about this for left button dragging."""
+        button = event.buttons()
+        if button in (MouseButton.NoButton, MouseButton.RightButton, MouseButton.MiddleButton):
+            # ignore the event if not dragging with left button
+            return
+
+        # default as mouses can have a ton of buttons
+        if button is not MouseButton.LeftButton:
+            logger.debug("Unknown drag button: %r", button)
+        print("============ MOUSE drag left")
+        button_name = "left"
+        action = "drag"
+        modifier = self.get_modifier(event)
+        grid = 0  # FIXME: may change when multi-edit?
+
+        pos = event.position()
+        row, col = self._get_grid_cell(pos.x(), pos.y())
+        #    self.nvim.nvim_input_mouse(button, action, modifier, 0, int(row), int(col))
+        self.loop.create_task(
+            self.main_window.nvi.request(
+                None, "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            )
+        )
+
+    def wheelEvent(self, event):
+        print("================ MOUSE wheel", event, event.angleDelta())
+# {button} Mouse button: one of "left", "right", "middle", "wheel", "move", "x1", "x2".
+# {action} For the wheel, one of "up", "down", "left", "right". Ignored for "move".
+# {modifier} the "-" separator is optional, so "C-A-", "c-a" and "CA" can all be used to specify Ctrl+Alt+click.
+# {grid} Grid number if the client uses ui-multigrid, else 0.
+# {row} Mouse row-position (zero-based, like redraw events)
+# {col} Mouse column-position (zero-based, like redraw events)
+
+    def send_mouse_event(self, event, action):
+        button_map = {
+            MouseButton.LeftButton: "left",
+            MouseButton.RightButton: "right",
+            MouseButton.MiddleButton: "middle",
+        }
+
+        button = button_map.get(event.button(), "left")
+        modifier = self.get_modifier(event)
+
+        pos_x = event.position().x()
+        pos_y = event.position().y()
+
+        print("============ MOUSE EVENT", pos_x, pos_y, action, button, modifier)
+
+        ## Convertir posición en píxeles a celdas
+        #col = event.position().x() // self.cell_width
+        #row = event.position().y() // self.cell_height
+
+        #try:
+        #    self.nvim.nvim_input_mouse(button, action, modifier, 0, int(row), int(col))
+        #except Exception as e:
+        #    print("Error enviando evento:", e)
+
+    def get_modifier(self, event):
+        mods = []
+        # FIXME: improve
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            mods.append("S")
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            mods.append("C")
+        if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            mods.append("A")
+        return "-".join(mods)
+
+
+class TextDisplay(BaseDisplay):
+    """A text display widget."""
+
+    # cache to hold chars drawing widths; cleaned when font changes
+    _char_drawing_widths_cache = {}
+
+    def __init__(self, main_window, nvim_manager, loop):
+        super().__init__()
+        self.main_window = main_window
+        self.nvim_manager = nvim_manager
+        self.loop = loop  # FIXME: this will go away eventually when "request" can be done easily
+        self.initial_resizing_done = False
+
+        # some defaults
+        self.font_size = None
+        self.display_size = (80, 20)
+        self.set_font("Courier", 12)
+
+        self.lines = LogicalLines.empty()
+        self.cursor_pos = (0, 0)
+        self.cursor_painter = lambda *a: None
+        self.need_grid_clearing = True
+
+    def window_resize(self):
+        """Inform Neovim of new window size."""
         cols = max(MIN_COLS_ROWS, int(self.width() / self.font_size.width))
         rows = max(MIN_COLS_ROWS, int(self.height() / self.font_size.height))
 
@@ -300,23 +514,18 @@ class TextDisplay(QWidget):
         """FIXME."""  # FIXME
         await self.main_window.nvi.request(None, "nvim_input", key)
 
-    def keyPressEvent(self, event: QKeyEvent):
-        """Get all keyboard events."""
-        print("\n========== Key", repr(event.text()), hex(event.key()), repr(event.modifiers()))
-
+    def handle_keyboard(self, key_text, key, modifiers):
+        """Handle keyboard events."""
         # simple case when it's just unicode text
-        key_text = event.text()
         if key_text:
             self.loop.create_task(self._send_key_to_nvim(key_text))
             return
 
         # need to compose special keys
-        key = event.key()
         keyname = QT_NVIM_KEYS_MAP.get(key)
         if keyname is None:
             return
 
-        modifiers = event.modifiers()
         parts = []
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             parts.append("C")
@@ -463,7 +672,7 @@ class TextDisplay(QWidget):
         painter.drawPath(path)
 
     def _get_drawing_widths(self, logical_char):
-        """Define the values for accommodating chars in the line.
+        """Define the values for placing chars in the line.
 
         This is cached per char; note this cache is cleaned when font changes.
 
@@ -475,7 +684,6 @@ class TextDisplay(QWidget):
             # not in the cache: calculate, store, and return values
             pass
 
-        print("===========++GGG", logical_char)
         fm = QFontMetricsF(self.font)
         char_width = fm.horizontalAdvance(logical_char.char)
 
@@ -489,12 +697,8 @@ class TextDisplay(QWidget):
         self._char_drawing_widths_cache[logical_char] = values
         return values
 
-    def paintEvent(self, event):
-        """Paint the widget."""
-        print("======= PAINT!")
-        painter = QPainter(self)
-        painter.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
-
+    def paint(self, painter):
+        """Paint (draw) the grid."""
         cell_height = self.font_size.height
 
         # paint all backgrounds first!
@@ -517,7 +721,7 @@ class TextDisplay(QWidget):
                 x = base_x
                 base_x += slot_width
 
-                rect = QRectF(x, base_y, math.ceil(slot_width), cell_height)
+                rect = QRectF(x, base_y, slot_width, cell_height)
                 painter.fillRect(rect, logical_char.format.background)
 
         # the foregrounds
@@ -532,8 +736,8 @@ class TextDisplay(QWidget):
 
             # FIXME: some of all this should be cached in LogicalLine, no need to recreate
             # everything on each paint
-            complete_text = [lc and (lc.char * 2 if lc.is_wide else lc.char) for lc in logical_line]
-            print("================ paint", row, len(complete_text), repr(complete_text))
+            # complete_text = [lc and (lc.char * 2 if lc.is_wide else lc.char) for lc in logical_line]
+            # print("================ paint", row, len(complete_text), repr(complete_text))
 
             for col, logical_char in enumerate(logical_line):
                 if logical_char is None:
@@ -593,18 +797,16 @@ class TextDisplay(QWidget):
                                 f"Invalid underline style: {logical_char.format.underline.style!r}"
                             )
 
-                # FIXME: remove blue points
-                painter.setPen(QColor(0, 0, 255))
-                painter.drawPoint(QPointF(base_x, base_y))
+                # # FIXME: remove blue points
+                # painter.setPen(QColor(0, 0, 255))
+                # painter.drawPoint(QPointF(base_x, base_y))
 
                 # the cursor, if that is the position
                 if col == cursor_col and row == cursor_row:
-                    print("============== paint cursor; char, x, width", repr(logical_char.char), base_x, slot_width)
-                    self.cursor_painter(painter, base_x, base_y, slot_width)
+                    # print("============== paint cursor; char, x, width", repr(logical_char.char), base_x, slot_width)
+                    self.cursor_painter(painter, base_x, base_y, slot_width - 1)
 
                 base_x += slot_width
-
-        painter.end()
 
     def change_mode(self, mode_info):
         """Change mode."""
@@ -660,7 +862,7 @@ class TextDisplay(QWidget):
 
 
 class Vym(QMainWindow):
-    def __init__(self, loop, nvim_exec_path):
+    def __init__(self, loop, path_to_open, nvim_exec_path):
         super().__init__()
         logger.info("Starting Vym")
         self._closing = 0
@@ -670,7 +872,7 @@ class Vym(QMainWindow):
         self.nvi = NvimInterface(
             nvim_exec_path, loop, self.nvim_manager.notification_handler, self._quit_callback
         )
-        loop.create_task(self.setup_nvim())
+        loop.create_task(self.setup_nvim(path_to_open))
 
         self.current_display_size = None
         self.current_font = None
@@ -695,7 +897,7 @@ class Vym(QMainWindow):
 
         self.adjustSize()  # FIXME
 
-    async def setup_nvim(self):
+    async def setup_nvim(self, path_to_open):
         """Set up Neovim."""
         def show_api_info(response):
             channel_id, api_metadata = response
@@ -711,6 +913,12 @@ class Vym(QMainWindow):
 
         nvim_config = {"ext_linegrid": True}
         await self.nvi.request(None, "nvim_ui_attach", 80, 20, nvim_config)
+
+        if path_to_open is not None:
+            # FIXME: qué onda "-" para stdin?
+            cmd = {"cmd": "edit", "args": [path_to_open]}
+            opts = {"output": False}  # don't capture output
+            await self.nvi.request(None, "nvim_cmd", cmd, opts)
 
     def test_action(self):
         print("Botón de PyQt6 presionado")
@@ -888,16 +1096,9 @@ class Vym(QMainWindow):
         self.display.flush()
 
 
-def main():
+def main(loglevel, nvim_exec_path, path_to_open):
     """Main entry point."""
-    # FIXME: improve cmd line handlers
-    if "-v" in sys.argv or "--verbose" in sys.argv:
-        logging.getLogger("vym").setLevel(logging.DEBUG)
-    if "-t" in sys.argv or "--trace" in sys.argv:
-        logging.getLogger("vym").setLevel(5)
-
-    # FIXME: receive this as a parameter
-    nvim_exec_path = "/home/facundo/sistema/nvim-0.11.1"
+    logging.getLogger("vym").setLevel(loglevel)
 
     app = qasync.QApplication(sys.argv)
 
@@ -908,7 +1109,7 @@ def main():
     app_close_event = asyncio.Event()
     app.aboutToQuit.connect(app_close_event.set)
 
-    main_window = Vym(event_loop, nvim_exec_path)
+    main_window = Vym(event_loop, path_to_open, nvim_exec_path)
     main_window.show()
 
     with event_loop:

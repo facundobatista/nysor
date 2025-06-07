@@ -1,5 +1,15 @@
 fase 1
+- que cargue un archivo al pasárselo por cmdline
 - basic interaction with mouse
+    - botón izquierdo
+        que siempre que marque, "copie" al "segundo clipboard"
+    - botón del medio
+        que "pegue" el "segundo clipboard"
+    - botón derecho
+        que abra una ventana
+    - ruedita
+        arriba / abajo
+        con shift, izq/der
 - detalles!
     - ver que pasa al cerrar el archivo con X-ventana cuando hay cambios
 - limpiar text view!!!
