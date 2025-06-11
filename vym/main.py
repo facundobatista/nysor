@@ -312,11 +312,13 @@ class BaseDisplay(QWidget):
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
-        #    self.nvim.nvim_input_mouse(button, action, modifier, 0, int(row), int(col))
-        self.loop.create_task(
-            self.main_window.nvi.request(
-                None, "nvim_input_mouse", button_name, action, modifier, grid, row, col
-            )
+        #self.loop.create_task(
+        #    self.main_window.nvi.call(
+        #        "nvim_input_mouse", button_name, action, modifier, grid, row, col
+        #    )
+        #)
+        self.main_window.nvi.future_call(
+            "nvim_input_mouse", button_name, action, modifier, grid, row, col
         )
 
 
@@ -349,11 +351,8 @@ class BaseDisplay(QWidget):
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
-        #    self.nvim.nvim_input_mouse(button, action, modifier, 0, int(row), int(col))
-        self.loop.create_task(
-            self.main_window.nvi.request(
-                None, "nvim_input_mouse", button_name, action, modifier, grid, row, col
-            )
+        self.main_window.nvi.future_call(
+            "nvim_input_mouse", button_name, action, modifier, grid, row, col
         )
 
         def cback(*a, **k):
@@ -415,11 +414,8 @@ class BaseDisplay(QWidget):
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
-        #    self.nvim.nvim_input_mouse(button, action, modifier, 0, int(row), int(col))
-        self.loop.create_task(
-            self.main_window.nvi.request(
-                None, "nvim_input_mouse", button_name, action, modifier, grid, row, col
-            )
+        self.main_window.nvi.future_call(
+            "nvim_input_mouse", button_name, action, modifier, grid, row, col
         )
 
     def wheelEvent(self, event):
@@ -494,31 +490,13 @@ class TextDisplay(BaseDisplay):
         """Inform Neovim of new window size."""
         cols = max(MIN_COLS_ROWS, int(self.width() / self.font_size.width))
         rows = max(MIN_COLS_ROWS, int(self.height() / self.font_size.height))
-
-        ## this verification and guardrail is to prevent an infinite loop of resizings when the
-        ## GUI window is initially started and adjusted
-        #if self.display_size == (cols, rows):
-        #    print("====+++++=== MAtch!")
-        #    self.initial_resizing_done = True
-        #if not self.initial_resizing_done:
-        #    return
-
-        # FIXME: reordenar lo que "nvi" ofrece, quizás este request debería tener una versión
-        # "bloqueante" que llame a asyncio.create_task automaticamente y no tengamos que hacerlo
-        # acá?
-        print("===++++++==========       cols/rows", cols, rows)
-        self.loop.create_task(self.main_window.nvi.request(None, "nvim_ui_try_resize", cols, rows))
-        print("===+++++===========  rE finished")
-
-    async def _send_key_to_nvim(self, key):
-        """FIXME."""  # FIXME
-        await self.main_window.nvi.request(None, "nvim_input", key)
+        self.main_window.nvi.future_call("nvim_ui_try_resize", cols, rows)
 
     def handle_keyboard(self, key_text, key, modifiers):
         """Handle keyboard events."""
         # simple case when it's just unicode text
         if key_text:
-            self.loop.create_task(self._send_key_to_nvim(key_text))
+            self.main_window.nvi.future_call("nvim_input", key_text)
             return
 
         # need to compose special keys
@@ -539,7 +517,7 @@ class TextDisplay(BaseDisplay):
         parts.append(keyname)
         composed = f"<{"-".join(parts)}>"
         print("============= key composed:", repr(composed))
-        asyncio.create_task(self._send_key_to_nvim(composed))
+        self.main_window.nvi.future_call("nvim_input", composed)
 
     def _build_empty_logical_lines(self):
         """Build an empty logical lines."""
@@ -899,26 +877,21 @@ class Vym(QMainWindow):
 
     async def setup_nvim(self, path_to_open):
         """Set up Neovim."""
-        def show_api_info(response):
-            channel_id, api_metadata = response
-            version = api_metadata["version"]
-            print("======+++R 3", version)
-            major = version["major"]
-            minor = version["minor"]
-            patch = version["patch"]
-            logger.info("Neovim API info: version %s.%s.%s", major, minor, patch)
-            print("======+++R 4")
-
-        await self.nvi.request(show_api_info, "nvim_get_api_info")
+        _, api_metadata = await self.nvi.call("nvim_get_api_info")
+        version = api_metadata["version"]
+        major = version["major"]
+        minor = version["minor"]
+        patch = version["patch"]
+        logger.info("Neovim API info: version %s.%s.%s", major, minor, patch)
 
         nvim_config = {"ext_linegrid": True}
-        await self.nvi.request(None, "nvim_ui_attach", 80, 20, nvim_config)
+        await self.nvi.call("nvim_ui_attach", 80, 20, nvim_config)
 
         if path_to_open is not None:
             # FIXME: qué onda "-" para stdin?
             cmd = {"cmd": "edit", "args": [path_to_open]}
             opts = {"output": False}  # don't capture output
-            await self.nvi.request(None, "nvim_cmd", cmd, opts)
+            await self.nvi.call("nvim_cmd", cmd, opts)
 
     def test_action(self):
         print("Botón de PyQt6 presionado")
@@ -937,10 +910,8 @@ class Vym(QMainWindow):
         #self.display.lines[6] = (6, 0, [(" emoji 😆d", fmt)])
 
     async def async_task(self):
-        def f(result):
-            print("=========== resp, result", repr(result))
-
-        await self.nvi.request(f, "nvim_list_uis")
+        result = await self.nvi.call("nvim_list_uis")
+        print("=========== resp, result", repr(result))
 
     async def _quit(self):
         """Close the GUI after Neovim is down."""

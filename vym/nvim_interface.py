@@ -77,6 +77,34 @@ class NvimInterface:
         await self.request(None, "nvim_command", "quit")
         await self._quit_event.wait()
 
+    def future_call(self, method, *params):
+        """Call a method with the indicated parameters and wait until result is available."""
+        print("============= WC 0", method, params)
+        task = self._loop.create_task(self.call(method, *params))
+        #coro = self.call(method, *params)
+        print("============= WC 1", task)
+        #future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        #print("============= WC 2", future)
+        #print("============= WC 3", repr(future.result))
+        #print("============= WC 4", future.result())
+
+    async def call(self, method, *params):
+        """Call a method with the indicated parameters."""
+        print("============ WC x0")
+        holder = []
+        event = asyncio.Event()
+
+        def cback(result):
+            holder.append(result)
+            event.set()
+
+        print("============ WC x1")
+        await self.request(cback, method, *params)
+        print("============ WC x2")
+        await event.wait()
+        print("============ WC x3")
+        return holder[0]
+
     async def request(self, callback, method, *params):
         """Send a 'request' message to run a method with some optional parameters.
 
