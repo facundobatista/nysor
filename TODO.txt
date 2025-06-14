@@ -1,19 +1,13 @@
 fase 1
-- que cargue un archivo al pasárselo por cmdline
-- basic interaction with mouse
-    - botón izquierdo
-        que siempre que marque, "copie" al "segundo clipboard"
-    - botón del medio
-        que "pegue" el "segundo clipboard"
-    - botón derecho
-        que abra una ventana
-    - ruedita
-        arriba / abajo
-        con shift, izq/der
+- agregarle barras de desplazamiento
+    - vertical
+    - horizontal
+        - que shift-ruedita sea horizontal!
 - detalles!
     - ver que pasa al cerrar el archivo con X-ventana cuando hay cambios
 - limpiar text view!!!
 - repensar que nvimanager llame directamnte al "display"
+- nombre del proyecto??
 - fixear / anotar los FIXME y XXXs
 
 fase 2
@@ -32,3 +26,6 @@ fase 3
 
 fase 4
 - que sean distintos procesos, pero que si se abre repe *lo sepa y suba esa ventana*
+- agregarle funcionalidad a la ventana contextual
+    - que busque esa palabra en todo el proyecto / venv?
+    - que salte a la definición de esa palabra (función, clase, etc)

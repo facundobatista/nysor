@@ -288,65 +288,72 @@ class BaseDisplay(QWidget):
         self.paint(painter)
         painter.end()
 
+    # ----- set of mouse related callbacks
+    #
+    # Nnothing is really done by the TextDisplay, but by Neovim directly or the main window:
+    #
+    # left button:
+    #    - on press: sent to Neovim, for cursor positioning
+    #    - on release: same, but also some chars are sent to handle clipboard properly; note that
+    #        double and triple clicking, and related selections, is automatically handled by Neovim
+    #
+    #  right button:
+    #    - on release: called a function in main window to present a context window
+    #
+    #  middle button:
+    #  - on press: sent to Neovim, for clipboard pasting
+    #
+    #  wheel: sent to Neovim, for displacement
+    #
+    #  mouse movement: only sent to Neovim if left button is pressed, for "dragging", implies
+    #    selection of text
+    #
+    #  notes:
+    #    - in every event sent to Neovim, whatever modifier is used is also sent
+    #    - if button is not left/middle/right, is considered left
+    #    - if an event is not described above, it's ignored
+    #
+
     def mousePressEvent(self, event):
         """A button mouse was pressed."""
-        #self.send_mouse_event(event, "press")
-
         button = event.button()
+
         if button is MouseButton.RightButton:
-            print("============ MOUSE press right XXX")  # FIXME : "right",
+            # ignored
             return
 
         if button is MouseButton.MiddleButton:
-            print("============ MOUSE press middle XXX")  # FIXME : "middle",
-            return
+            button_name = "middle"
+        else:
+            # really left, or default to left as mouses can have a ton of buttons
+            button_name = "left"
 
-        # default as mouses can have a ton of buttons
-        if button is not MouseButton.LeftButton:
-            logger.debug("Unknown pressed button: %r", button)
-        print("============ MOUSE press left")
-        button_name = "left"
         action = "press"
-        modifier = self.get_modifier(event)
+        modifier = self._get_button_modifiers(event)
         grid = 0  # FIXME: may change when multi-edit?
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
-        #self.loop.create_task(
-        #    self.main_window.nvi.call(
-        #        "nvim_input_mouse", button_name, action, modifier, grid, row, col
-        #    )
-        #)
         self.main_window.nvi.future_call(
             "nvim_input_mouse", button_name, action, modifier, grid, row, col
         )
-
-
-# {button} Mouse button: one of "left", "right", "middle", "wheel", "move", "x1", "x2".
-# {action} For ordinary buttons, one of "press", "drag", "release".
-# {modifier} String of modifiers each represented by a single char. The same specifiers are used as for a key press, except that the "-" separator is optional, so "C-A-", "c-a" and "CA" can all be used to specify Ctrl+Alt+click.
-# {grid} Grid number if the client uses ui-multigrid, else 0.
-# {row} Mouse row-position (zero-based, like redraw events)
-# {col} Mouse column-position (zero-based, like redraw events)
 
     def mouseReleaseEvent(self, event):
         """A button mouse was released."""
         button = event.button()
         if button is MouseButton.RightButton:
-            print("============ MOUSE release right XXX")  # FIXME : "right",
+            self.main_window.present_context_window()
             return
 
         if button is MouseButton.MiddleButton:
-            print("============ MOUSE release middle XXX")  # FIXME : "middle",
+            # ignored
             return
 
-        # default as mouses can have a ton of buttons
-        if button is not MouseButton.LeftButton:
-            logger.debug("Unknown released button: %r", button)
-        print("============ MOUSE release left")
+        # really left, or default to left as mouses can have a ton of buttons
         button_name = "left"
+
         action = "release"
-        modifier = self.get_modifier(event)
+        modifier = self._get_button_modifiers(event)
         grid = 0  # FIXME: may change when multi-edit?
 
         pos = event.position()
@@ -355,46 +362,8 @@ class BaseDisplay(QWidget):
             "nvim_input_mouse", button_name, action, modifier, grid, row, col
         )
 
-        def cback(*a, **k):
-            print("========= MOUSE cback", a, k)
-
-        self.loop.create_task(
-            self.main_window.nvi.request(cback, "nvim_call_function", "getpos", ["'<"])
-        )
-
-        self.loop.create_task(
-            self.main_window.nvi.request(cback, "nvim_call_function", "getpos", ["'>"])
-        )
-
-#start = rpc_call(sock, msgid, "nvim_call_function", ["getpos", ["'<"]])[3]
-#end = rpc_call(sock, msgid, "nvim_call_function", ["getpos", ["'>"]])[3]
-#
-#start_line, start_col = start[1] - 1, start[2] - 1
-#end_line, end_col = end[1] - 1, end[2] - 1
-#
-## Paso 2: getline(start_line, end_line)
-#lines = rpc_call(sock, msgid, "nvim_buf_get_lines", [0, start_line, end_line + 1, False])[3]
-#msgid += 1
-#
-## Paso 3: recortar
-#if start_line == end_line:
-#    lines = [lines[0][start_col:end_col + 1]]
-#else:
-#    lines[0] = lines[0][start_col:]
-#    lines[-1] = lines[-1][:end_col + 1]
-#
-## Paso 4: setreg("+", texto)
-#text = "\n".join(lines)
-#rpc_call(sock, msgid, "nvim_call_function", ["setreg", ["+", text]])
-
-
-
-
-    def _get_grid_cell(self, x, y):
-        """Return grid's row and column from pixels x and y."""
-        col = int(x / self.font_size.width)
-        row = int(y / self.font_size.height)
-        return row, col
+        # this will make Neovim to yank selection to the "X11 main selection"
+        self.main_window.nvi.future_call("nvim_input", '"*ygv')
 
     def mouseMoveEvent(self, event):
         """Mouse is moving; we only care about this for left button dragging."""
@@ -403,13 +372,10 @@ class BaseDisplay(QWidget):
             # ignore the event if not dragging with left button
             return
 
-        # default as mouses can have a ton of buttons
-        if button is not MouseButton.LeftButton:
-            logger.debug("Unknown drag button: %r", button)
-        print("============ MOUSE drag left")
+        # really left, or default to left as mouses can have a ton of buttons
         button_name = "left"
         action = "drag"
-        modifier = self.get_modifier(event)
+        modifier = self._get_button_modifiers(event)
         grid = 0  # FIXME: may change when multi-edit?
 
         pos = event.position()
@@ -419,48 +385,55 @@ class BaseDisplay(QWidget):
         )
 
     def wheelEvent(self, event):
-        print("================ MOUSE wheel", event, event.angleDelta())
-# {button} Mouse button: one of "left", "right", "middle", "wheel", "move", "x1", "x2".
-# {action} For the wheel, one of "up", "down", "left", "right". Ignored for "move".
-# {modifier} the "-" separator is optional, so "C-A-", "c-a" and "CA" can all be used to specify Ctrl+Alt+click.
-# {grid} Grid number if the client uses ui-multigrid, else 0.
-# {row} Mouse row-position (zero-based, like redraw events)
-# {col} Mouse column-position (zero-based, like redraw events)
+        """The wheel is used (or a wheel like interface).
 
-    def send_mouse_event(self, event, action):
-        button_map = {
-            MouseButton.LeftButton: "left",
-            MouseButton.RightButton: "right",
-            MouseButton.MiddleButton: "middle",
-        }
+        The event information is an angle. As Neovim only supports to be informed in one
+        direction, in case of having both displacements in X and Y, we inform twice.
 
-        button = button_map.get(event.button(), "left")
-        modifier = self.get_modifier(event)
+        Also, we inform only when the displacement is noticeable, for interface
+        not to be "too nervous". Note that typical wheel of standard mouses will
+        inform a delta of 120.
+        """
+        button_name = "wheel"
+        qpoint = event.angleDelta()
+        dx, dy = qpoint.x(), qpoint.y()
+        trigger_limit = 10
+        row, col = 0, 0  # seems to be ignored
+        grid = 0  # FIXME: may change when multi-edit?
 
-        pos_x = event.position().x()
-        pos_y = event.position().y()
+        if abs(dx) > trigger_limit:
+            action = "right" if dx > 0 else "left"
+            modifier = self._get_button_modifiers(event)
+            self.main_window.nvi.future_call(
+                "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            )
 
-        print("============ MOUSE EVENT", pos_x, pos_y, action, button, modifier)
+        if abs(dy) > trigger_limit:
+            action = "up" if dy > 0 else "down"
+            modifier = self._get_button_modifiers(event)
+            self.main_window.nvi.future_call(
+                "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            )
 
-        ## Convertir posición en píxeles a celdas
-        #col = event.position().x() // self.cell_width
-        #row = event.position().y() // self.cell_height
+    def _get_grid_cell(self, x, y):
+        """Return grid's row and column from pixels x and y."""
+        col = int(x / self.font_size.width)
+        row = int(y / self.font_size.height)
+        return row, col
 
-        #try:
-        #    self.nvim.nvim_input_mouse(button, action, modifier, 0, int(row), int(col))
-        #except Exception as e:
-        #    print("Error enviando evento:", e)
+    def _get_button_modifiers(self, event):
+        """Return a string indicating the used modifiers, to inform Neovim."""
+        indicators = []
+        mods = event.modifiers()
+        if mods & Qt.KeyboardModifier.ShiftModifier:
+            indicators.append("S")
+        if mods & Qt.KeyboardModifier.ControlModifier:
+            indicators.append("C")
+        if mods & Qt.KeyboardModifier.AltModifier:
+            indicators.append("A")
+        return "-".join(indicators)
 
-    def get_modifier(self, event):
-        mods = []
-        # FIXME: improve
-        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
-            mods.append("S")
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            mods.append("C")
-        if event.modifiers() & Qt.KeyboardModifier.AltModifier:
-            mods.append("A")
-        return "-".join(mods)
+    # ----- end of mouse related event handling methods
 
 
 class TextDisplay(BaseDisplay):
@@ -1023,6 +996,11 @@ class Vym(QMainWindow):
                 logger.warning("Some text format remained unprocessed: %s", hl)
 
         return fmt
+
+    def present_context_window(self):
+        """Present a context window with some options for the user."""
+        # FIXME
+        print("============ MOUSE context window!!")
 
     def write_display(self, row: int, col: int, sequence: list[Any]):
         """Write a sequence starting in the given row/column.
