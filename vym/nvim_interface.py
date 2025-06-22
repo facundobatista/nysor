@@ -9,7 +9,16 @@ import time
 
 import msgpack
 
-SOCK_PATH = "/tmp/_vymsubnvim.s"
+# the socket path to communicate with Neovim
+# FIXME: make this more unique
+_SOCK_PATH = "/tmp/_vymsubnvim.s"
+
+# some Neovim translation constants
+_EXT_TYPE_CODES = {
+    1: "window",
+    2: "buffer",
+    3: "tabpage",
+}
 
 logger = logging.getLogger(__name__)
 logging.addLevelName(5, "TRACE")
@@ -18,6 +27,18 @@ logging.addLevelName(5, "TRACE")
 def trace(msg, *params):
     """Log in trace level with a prefix."""
     logger.log(5, "[nvim] " + msg, *params)
+
+
+def ext_hook(code, data):
+    """Hook to process other external types."""
+    trace("====== ext hook! %r %r", code, data)
+    # code is the type of object
+    obj_type = _EXT_TYPE_CODES[code]
+
+    # Neovim encodes IDs as uint16 or uint32
+    obj_id = int.from_bytes(data, byteorder='big')
+
+    return [obj_type, obj_id]
 
 
 class NvimInterface:
@@ -32,16 +53,16 @@ class NvimInterface:
         self._quit_event = asyncio.Event()
         self._quit_callback = quit_callback
 
-        if os.path.exists(SOCK_PATH):
-            os.remove(SOCK_PATH)
+        if os.path.exists(_SOCK_PATH):
+            os.remove(_SOCK_PATH)
 
         logger.info("Starting Neovim process")
         if nvim_exec_path is None:
             nvim_exec_path = "nvim"
-        self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", SOCK_PATH])
+        self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", _SOCK_PATH])
         tini = time.time()
         while True:
-            if os.path.exists(SOCK_PATH):
+            if os.path.exists(_SOCK_PATH):
                 break
             logger.debug("Wait nvim process to start")
             # yes, we block; if we want to go fully async here we need to find out a better
@@ -52,14 +73,14 @@ class NvimInterface:
 
         self._client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._client.setblocking(False)
-        self._client.connect(SOCK_PATH)
+        self._client.connect(_SOCK_PATH)
         self._loop.add_reader(self._client, self._receive_responses)
         logger.info("Neovim setup done")
 
         self._callbacks = {}
         self._cb_counter = 0
 
-        self._msg_unpacker = msgpack.Unpacker(raw=False)
+        self._msg_unpacker = msgpack.Unpacker(raw=False, ext_hook=ext_hook)
 
     async def quit(self):
         """Finish neovim and close the process.

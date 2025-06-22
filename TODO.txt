@@ -1,14 +1,12 @@
 fase 1
-- agregarle barras de desplazamiento
-    - vertical
-    - horizontal
-        - que shift-ruedita sea horizontal!
+- ver eso de que no escuchamos un win
 - detalles!
     - ver que pasa al cerrar el archivo con X-ventana cuando hay cambios
 - limpiar text view!!!
 - repensar que nvimanager llame directamnte al "display"
 - nombre del proyecto??
 - fixear / anotar los FIXME y XXXs
+- anotar en el README todo lo que hace "hoy", y las siguientes fases
 
 fase 2
 - separar barra comnados

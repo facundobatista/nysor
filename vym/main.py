@@ -10,7 +10,7 @@ from typing import Any
 from functools import partial
 
 import qasync
-from PyQt6.QtWidgets import QMainWindow, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QMainWindow, QPushButton, QVBoxLayout, QWidget, QHBoxLayout, QScrollBar
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -21,8 +21,6 @@ from PyQt6.QtGui import (
     QPen,
 )
 from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
-
-
 
 from vym.nvim_interface import NvimInterface
 from vym.logical_lines import LogicalLines, CharFormat, CharUnderline
@@ -90,6 +88,16 @@ QT_NVIM_KEYS_MAP = {
 
 # Handier
 MouseButton = Qt.MouseButton
+
+
+def futurize(async_function):
+    """Decorator to convert a blocking function in a async task to run in the future."""
+
+    def blocking_function(*args, **kwargs):
+        coro = async_function(*args, **kwargs)
+        asyncio.create_task(coro)
+
+    return blocking_function
 
 
 class NvimManager:
@@ -241,7 +249,12 @@ class NvimManager:
         self.main_window.setWindowTitle(title)
 
     def _n__win_viewport(self, args):
-        """Ignoring this, it's not documented, and it looks it's not useful for us."""
+        """Information for the GUI viewport."""
+        grid, objinfo, topline, botline, curline, curcol, line_count, scroll_delta = args
+        # FIXME: ignore grid and objinfo so far, need to revisit this when multiwindow
+
+        # Note: can't find use to scroll_delta (maybe for smooth scroolbar?)
+        self.main_window.adjust_viewport(topline, botline, line_count, curcol)
 
 
 class BaseDisplay(QWidget):
@@ -469,6 +482,8 @@ class TextDisplay(BaseDisplay):
         """Handle keyboard events."""
         # simple case when it's just unicode text
         if key_text:
+            key_text = key_text.replace("<", "<LT>")
+            print("=====++=++======= key simple:", repr(key_text))
             self.main_window.nvi.future_call("nvim_input", key_text)
             return
 
@@ -489,7 +504,7 @@ class TextDisplay(BaseDisplay):
 
         parts.append(keyname)
         composed = f"<{"-".join(parts)}>"
-        print("============= key composed:", repr(composed))
+        print("=====++=++======= key composed:", repr(composed))
         self.main_window.nvi.future_call("nvim_input", composed)
 
     def _build_empty_logical_lines(self):
@@ -672,7 +687,7 @@ class TextDisplay(BaseDisplay):
                 x = base_x
                 base_x += slot_width
 
-                rect = QRectF(x, base_y, slot_width, cell_height)
+                rect = QRectF(x, base_y, slot_width + 1, cell_height)
                 painter.fillRect(rect, logical_char.format.background)
 
         # the foregrounds
@@ -825,26 +840,47 @@ class Vym(QMainWindow):
         )
         loop.create_task(self.setup_nvim(path_to_open))
 
+        # FIXME: may these go away?
         self.current_display_size = None
         self.current_font = None
         self.nvimhl_to_qtfmt = {}
 
+        # scrollbars
+        self.v_scroll = QScrollBar(Qt.Orientation.Vertical)
+        self.v_scroll.valueChanged.connect(self.vertical_scroll_changed)
+        self.v_scroll.setMinimum(0)
+        self.v_scroll.setMaximum(100)
+        self.v_scroll_last_position = None
+        self.h_scroll = QScrollBar(Qt.Orientation.Horizontal)
+        self.h_scroll.valueChanged.connect(self.horizontal_scroll_changed)
+        self.h_scroll.setMinimum(0)
+        self.h_scroll.setMaximum(100)
+        self.h_scroll_last_position = None
+
+        # central widget to hold main layout
         self.central_widget = QWidget(self)
         self.setCentralWidget(self.central_widget)
-        self.layout = QVBoxLayout(self.central_widget)
+        self.main_layout = QVBoxLayout(self.central_widget)
 
+        # horizontal layout for text display and vertical scroll bar
+        hbox = QHBoxLayout()
         self.display = TextDisplay(self, self.nvim_manager, loop)
         self.display.setFocus()
-        self.layout.addWidget(self.display, stretch=1)
+        hbox.addWidget(self.display, stretch=1)
+        hbox.addWidget(self.v_scroll)
+        self.main_layout.addLayout(hbox)
+
+        # rest of vertical widgets
+        self.main_layout.addWidget(self.h_scroll)
 
         # FIXME: dejar esto para entender que funciona
         self.button = QPushButton("Haz clic aquí", self)
         self.button.clicked.connect(self.test_action)
-        self.layout.addWidget(self.button)
+        self.main_layout.addWidget(self.button)
 
         self.button2 = QPushButton("Run async task", self)
         self.button2.clicked.connect(lambda: asyncio.create_task(self.async_task()))
-        self.layout.addWidget(self.button2)
+        self.main_layout.addWidget(self.button2)
 
         self.adjustSize()  # FIXME
 
@@ -1009,7 +1045,7 @@ class Vym(QMainWindow):
         repetitions.
         """  # FIXME
         textinfo = []
-        print("========== WRITE", row, col, sequence)
+        print("====++=++===== WRITE", row, col, sequence)
 
         fmt = self._build_text_format(None)
         for item in sequence:
@@ -1043,6 +1079,89 @@ class Vym(QMainWindow):
     def flush(self):
         """FIXME."""
         self.display.flush()
+
+    @futurize
+    async def adjust_viewport(self, topline, botline, line_count, curcol):
+        """Adjust scrollbar according to what Neovim says."""
+        display_width, display_height = self.display.display_size
+
+        # vertical: use information from the viewport
+        print(f"====++=++== viewport vert {topline=} {botline=} {line_count=}")
+        if topline == 0 and line_count <= display_height:
+            self.v_scroll.setEnabled(False)
+            self.v_scroll.setMaximum(0)
+        else:
+            self.v_scroll.setEnabled(True)
+            self.v_scroll.setPageStep(display_height)
+            self.v_scroll.setMaximum(line_count - 1)
+            self.v_scroll_last_position = topline  # before setting value to ignore later event
+            self.v_scroll.setValue(topline)
+
+        # only if not wrapping, using current column but also queried line lengths
+        # FIXME: acá en las opciones se puede pasar el "scope", qué ventana, revisitar cuando
+        # tengamos muchas ventanas
+        is_wrapping = await self.nvi.call("nvim_get_option_value", "wrap", {})
+        if is_wrapping:
+            # just turn off the scroll bar as when wrapping all text will be inside the window
+            self.h_scroll.setEnabled(False)
+            self.h_scroll.setMaximum(0)
+            return
+
+        # get the lengths of lines that are currently shown
+        buf = 0  # FIXME: why 0?
+        start = topline + 1  # getbufline's first line is 1
+        end = botline - 1  # botline is the "next line, out of the view"
+        cmd = f"map(getbufline({buf}, {start}, {end}), {{key, val -> strlen(val)}})"
+        line_lengths = await self.nvi.call("nvim_eval", cmd)
+        print(f"====++=++=== viewport horz {is_wrapping=} {curcol=} {line_lengths=}")
+
+        max_line = max(line_lengths)
+        if max_line <= display_width:
+            self.h_scroll.setEnabled(False)
+            self.h_scroll.setMaximum(0)
+        else:
+            self.h_scroll.setEnabled(True)
+            self.h_scroll.setMaximum(max_line)
+            win_info = await self.nvi.call("nvim_eval", "getwininfo()")
+            assert len(win_info) == 1  # FIXME: multiventana?
+            leftcol = win_info[0]["leftcol"]
+            print("=====++=++======= left col", leftcol)
+            self.h_scroll.setPageStep(display_width)
+            self.h_scroll.setMaximum(max_line - 1)
+            self.h_scroll_last_position = leftcol  # before setting value to ignore later event
+            self.h_scroll.setValue(leftcol)
+
+    def vertical_scroll_changed(self, value):
+        """Handle the vertical scroll bar being modified through the widget."""
+        delta = value - self.v_scroll_last_position
+        print("=====++=++========= scroll vertical:", value, delta)
+        if delta > 0:
+            # down
+            cmdkey = "\x05"
+        elif delta < 0:
+            # up
+            cmdkey = "\x19"
+        else:
+            print("=====++=++=============== NO MOV")
+            return
+        self.v_scroll_last_position = value
+        self.nvi.future_call("nvim_input", abs(delta) * cmdkey)
+
+    def horizontal_scroll_changed(self, value):
+        """Handle the horizontal scroll bar being modified through the widget."""
+        delta = value - self.h_scroll_last_position
+        print("=====++=++========= scroll horizontal:", value, delta)
+        if delta > 0:
+            # right
+            cmdkey = "zl"
+        elif delta < 0:
+            # left
+            cmdkey = "zh"
+        else:
+            print("=====++=++=============== NO MOV")
+            return
+        self.h_scroll_last_position = value
+        self.nvi.future_call("nvim_command", f"normal! {abs(delta)}{cmdkey}")
 
 
 def main(loglevel, nvim_exec_path, path_to_open):
