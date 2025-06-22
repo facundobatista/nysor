@@ -347,7 +347,7 @@ class BaseDisplay(QWidget):
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
-        self.main_window.nvi.future_call(
+        self.main_window.nvi.future_request(
             "nvim_input_mouse", button_name, action, modifier, grid, row, col
         )
 
@@ -371,12 +371,12 @@ class BaseDisplay(QWidget):
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
-        self.main_window.nvi.future_call(
+        self.main_window.nvi.future_request(
             "nvim_input_mouse", button_name, action, modifier, grid, row, col
         )
 
         # this will make Neovim to yank selection to the "X11 main selection"
-        self.main_window.nvi.future_call("nvim_input", '"*ygv')
+        self.main_window.nvi.future_request("nvim_input", '"*ygv')
 
     def mouseMoveEvent(self, event):
         """Mouse is moving; we only care about this for left button dragging."""
@@ -393,7 +393,7 @@ class BaseDisplay(QWidget):
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
-        self.main_window.nvi.future_call(
+        self.main_window.nvi.future_request(
             "nvim_input_mouse", button_name, action, modifier, grid, row, col
         )
 
@@ -417,14 +417,14 @@ class BaseDisplay(QWidget):
         if abs(dx) > trigger_limit:
             action = "right" if dx > 0 else "left"
             modifier = self._get_button_modifiers(event)
-            self.main_window.nvi.future_call(
+            self.main_window.nvi.future_request(
                 "nvim_input_mouse", button_name, action, modifier, grid, row, col
             )
 
         if abs(dy) > trigger_limit:
             action = "up" if dy > 0 else "down"
             modifier = self._get_button_modifiers(event)
-            self.main_window.nvi.future_call(
+            self.main_window.nvi.future_request(
                 "nvim_input_mouse", button_name, action, modifier, grid, row, col
             )
 
@@ -476,7 +476,7 @@ class TextDisplay(BaseDisplay):
         """Inform Neovim of new window size."""
         cols = max(MIN_COLS_ROWS, int(self.width() / self.font_size.width))
         rows = max(MIN_COLS_ROWS, int(self.height() / self.font_size.height))
-        self.main_window.nvi.future_call("nvim_ui_try_resize", cols, rows)
+        self.main_window.nvi.future_request("nvim_ui_try_resize", cols, rows)
 
     def handle_keyboard(self, key_text, key, modifiers):
         """Handle keyboard events."""
@@ -484,7 +484,7 @@ class TextDisplay(BaseDisplay):
         if key_text:
             key_text = key_text.replace("<", "<LT>")
             print("=====++=++======= key simple:", repr(key_text))
-            self.main_window.nvi.future_call("nvim_input", key_text)
+            self.main_window.nvi.future_request("nvim_input", key_text)
             return
 
         # need to compose special keys
@@ -505,7 +505,7 @@ class TextDisplay(BaseDisplay):
         parts.append(keyname)
         composed = f"<{"-".join(parts)}>"
         print("=====++=++======= key composed:", repr(composed))
-        self.main_window.nvi.future_call("nvim_input", composed)
+        self.main_window.nvi.future_request("nvim_input", composed)
 
     def _build_empty_logical_lines(self):
         """Build an empty logical lines."""
@@ -1145,7 +1145,7 @@ class Vym(QMainWindow):
             print("=====++=++=============== NO MOV")
             return
         self.v_scroll_last_position = value
-        self.nvi.future_call("nvim_input", abs(delta) * cmdkey)
+        self.nvi.future_request("nvim_input", abs(delta) * cmdkey)
 
     def horizontal_scroll_changed(self, value):
         """Handle the horizontal scroll bar being modified through the widget."""
@@ -1161,7 +1161,7 @@ class Vym(QMainWindow):
             print("=====++=++=============== NO MOV")
             return
         self.h_scroll_last_position = value
-        self.nvi.future_call("nvim_command", f"normal! {abs(delta)}{cmdkey}")
+        self.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
 
 
 def main(loglevel, nvim_exec_path, path_to_open):

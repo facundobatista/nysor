@@ -79,6 +79,7 @@ class NvimInterface:
 
         self._callbacks = {}
         self._cb_counter = 0
+        self._ui_attached = False
 
         self._msg_unpacker = msgpack.Unpacker(raw=False, ext_hook=ext_hook)
 
@@ -98,12 +99,8 @@ class NvimInterface:
         await self.request(None, "nvim_command", "quit")
         await self._quit_event.wait()
 
-    def future_call(self, method, *params):
-        """Call a method with the indicated parameters and wait until result is available."""
-        self._loop.create_task(self.call(method, *params))
-
     async def call(self, method, *params):
-        """Call a method with the indicated parameters."""
+        """Call a method with the indicated parameters and wait until result is available."""
         holder = []
         event = asyncio.Event()
 
@@ -115,11 +112,27 @@ class NvimInterface:
         await event.wait()
         return holder[0]
 
+    def future_request(self, method, *params):
+        """Send a request in the future; response, if any, will be discarded."""
+        self._loop.create_task(self.request(None, method, *params))
+
     async def request(self, callback, method, *params):
         """Send a 'request' message to run a method with some optional parameters.
 
         The callback will be executed when the information is available.
         """
+        # filter out UI requests if UI still not attached
+        if method == "nvim_ui_attach":
+            self._ui_attached = True
+        if method.startswith("nvim_ui") and not self._ui_attached:
+            logger.debug("Ignoring request as UI still not attached; method: %r", method)
+
+            # in case a callback is passed, just call it to close up waiters/coroutines; it's an
+            # error condition, but the called method is doomed anyway
+            if callback is not None:
+                callback(None)
+            return
+
         self._cb_counter += 1
         self._callbacks[self._cb_counter] = callback
 

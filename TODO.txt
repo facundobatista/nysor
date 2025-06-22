@@ -1,7 +1,5 @@
 fase 1
-- ver eso de que no escuchamos un win
-- detalles!
-    - ver que pasa al cerrar el archivo con X-ventana cuando hay cambios
+- ver que pasa al cerrar el archivo con X-ventana cuando hay cambios
 - limpiar text view!!!
 - repensar que nvimanager llame directamnte al "display"
 - nombre del proyecto??
