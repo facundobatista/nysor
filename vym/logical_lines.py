@@ -67,19 +67,15 @@ class LogicalLines:
             else:
                 expanded.extend(LogicalChar(char, fmt) for char in text)
 
-        print("============= write line row", row)
         # it's fine to create new lines in the map, because gaps are created when scrolling
         prvline = self._lines.setdefault(row, [])
 
         if col > len(prvline):
             raise ValueError("Trying to write outside the line; needs to rethink model!!!")
         prvline[col: col + len(expanded)] = expanded
-        print("============= current", [
-            lc and (lc.char * 2 if lc.is_wide else lc.char) for lc in prvline])
 
     def scroll_vertical(self, top, bottom, delta):
         """Scroll vertically some lines in the grid."""
-        print("=============== scroll vertical", top, bottom, delta)
         if abs(delta) >= bottom - top:
             raise ValueError("Overflow scrolling; not supported yet")
 

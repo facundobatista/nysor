@@ -24,6 +24,10 @@ logger = logging.getLogger(__name__)
 logging.addLevelName(5, "TRACE")
 
 
+class NeovimError(Exception):
+    """Exception that indicates an error from Neovim."""
+
+
 def trace(msg, *params):
     """Log in trace level with a prefix."""
     logger.log(5, "[nvim] " + msg, *params)
@@ -31,7 +35,6 @@ def trace(msg, *params):
 
 def ext_hook(code, data):
     """Hook to process other external types."""
-    trace("====== ext hook! %r %r", code, data)
     # code is the type of object
     obj_type = _EXT_TYPE_CODES[code]
 
@@ -50,8 +53,9 @@ class NvimInterface:
 
         # the event is to wait for process finalization when we receive the order to close it; at
         # all times the callback is called, as the finalization may be initiated by Neovim itself
-        self._quit_event = asyncio.Event()
+        self._quit_processed = asyncio.Event()
         self._quit_callback = quit_callback
+        self._neovim_already_finished = False
 
         if os.path.exists(_SOCK_PATH):
             os.remove(_SOCK_PATH)
@@ -92,12 +96,27 @@ class NvimInterface:
         Note that there is no real response to the 'quit' command, the process just disappears
         at some point.
         """
-        if self._quit_event.is_set():
-            # neovim process already finished
+        if self._neovim_already_finished:
             return
 
-        await self.request(None, "nvim_command", "quit")
-        await self._quit_event.wait()
+        holder = [None]  # default, will remain like this if _quit_processed is set after ending OK
+
+        def eback(message):
+            """Error with the 'quit' command, pass the message."""
+            holder[0] = message
+            self._quit_processed.set()
+
+        # this is a weird request; if all continues OK, Neovim will quit and a possible callback
+        # is never called; however if there's a situation and Neovim can't quit, the errback
+        # will be called
+        await self._request(None, eback, "nvim_command", "quit")
+
+        # sometimes the quit command needs an extra Enter, so send it!
+        await self._request(None, None, "nvim_input", "\r")
+
+        await self._quit_processed.wait()
+        self._quit_processed.clear()  # for next quitting attempt
+        return holder[0]
 
     async def call(self, method, *params):
         """Call a method with the indicated parameters and wait until result is available."""
@@ -108,15 +127,18 @@ class NvimInterface:
             holder.append(result)
             event.set()
 
-        await self.request(cback, method, *params)
+        def eback(message):
+            raise NeovimError(message)
+
+        await self._request(cback, eback, method, *params)
         await event.wait()
         return holder[0]
 
     def future_request(self, method, *params):
-        """Send a request in the future; response, if any, will be discarded."""
-        self._loop.create_task(self.request(None, method, *params))
+        """Send a request in the future; response/error, if any, will be discarded."""
+        self._loop.create_task(self._request(None, None, method, *params))
 
-    async def request(self, callback, method, *params):
+    async def _request(self, callback, errback, method, *params):
         """Send a 'request' message to run a method with some optional parameters.
 
         The callback will be executed when the information is available.
@@ -134,7 +156,7 @@ class NvimInterface:
             return
 
         self._cb_counter += 1
-        self._callbacks[self._cb_counter] = callback
+        self._callbacks[self._cb_counter] = (callback, errback)
 
         # type (0 == request), msgid, method, params
         payload = msgpack.packb([0, self._cb_counter, method.encode("ascii"), params])
@@ -169,10 +191,11 @@ class NvimInterface:
                 # response
                 msgid, error, result = rest
                 trace("Receiving response msgid=%d error=%r result=%r", msgid, error, result)
-                callback = self._callbacks.pop(msgid)
+                callback, errback = self._callbacks.pop(msgid)
 
                 if error is not None:
                     logger.error("Error from Neovim: %r", error)
+                    errback(error[1])
                 if callback is not None:
                     callback(result)
 
@@ -189,6 +212,7 @@ class NvimInterface:
             # process finished; do this closing at the end of the reading in any case there is a
             # final response to read
             logger.info("Neovim process finished")
+            self._neovim_already_finished = True
             self._loop.remove_reader(self._client)
             self._quit_callback()
-            self._quit_event.set()
+            self._quit_processed.set()  # 'quit' processed satisfactorily: Neovim ended

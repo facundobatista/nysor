@@ -10,7 +10,15 @@ from typing import Any
 from functools import partial
 
 import qasync
-from PyQt6.QtWidgets import QMainWindow, QPushButton, QVBoxLayout, QWidget, QHBoxLayout, QScrollBar
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollBar,
+    QVBoxLayout,
+    QWidget,
+)
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -30,7 +38,6 @@ logging.basicConfig(
     format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s', datefmt='%H:%M:%S', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 print("=======++ ++====== MAIN", __name__)
-logger.setLevel(logging.INFO)
 # FIXME: replace prints
 # FIXME: foffing?
 
@@ -376,7 +383,7 @@ class BaseDisplay(QWidget):
         )
 
         # this will make Neovim to yank selection to the "X11 main selection"
-        self.main_window.nvi.future_request("nvim_input", '"*ygv')
+        self.main_window.nvi.future_request("nvim_command", 'normal! "*ygv')
 
     def mouseMoveEvent(self, event):
         """Mouse is moving; we only care about this for left button dragging."""
@@ -925,7 +932,17 @@ class Vym(QMainWindow):
     async def _quit(self):
         """Close the GUI after Neovim is down."""
         logger.debug("Start shutdown, asking")
-        await self.nvi.quit()
+        error = await self.nvi.quit()
+        if error:
+            dlg = QMessageBox(self)
+            dlg.setIcon(QMessageBox.Icon.Warning)
+            dlg.setWindowTitle("Neovim Error")
+            dlg.setText(error)
+            dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            dlg.exec()
+            self._closing = 0  # reset
+            return
+
         self._closing = 2  # allows final close
         logger.debug("Start shutdown, done")
         self.close()
@@ -934,7 +951,7 @@ class Vym(QMainWindow):
         """Close the GUI because of nvim interface request."""
         if self._closing == 0:
             # only if it was not initiated internally
-            logger.debug("Shutdown requested by interface")
+            logger.debug("Shutdown requested by nvim interface")
             self._closing = 2
             self.close()
 

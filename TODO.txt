@@ -1,8 +1,7 @@
 fase 1
-- ver que pasa al cerrar el archivo con X-ventana cuando hay cambios
 - limpiar text view!!!
 - repensar que nvimanager llame directamnte al "display"
-- nombre del proyecto??
+- nombre del proyecto?? y agregar "headers copyright" en los archivos
 - fixear / anotar los FIXME y XXXs
 - anotar en el README todo lo que hace "hoy", y las siguientes fases
 
