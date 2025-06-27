@@ -56,6 +56,7 @@ class NvimInterface:
         self._quit_processed = asyncio.Event()
         self._quit_callback = quit_callback
         self._neovim_already_finished = False
+        self._neovim_being_quited = False
 
         if os.path.exists(_SOCK_PATH):
             os.remove(_SOCK_PATH)
@@ -109,13 +110,15 @@ class NvimInterface:
         # this is a weird request; if all continues OK, Neovim will quit and a possible callback
         # is never called; however if there's a situation and Neovim can't quit, the errback
         # will be called
+        self._neovim_being_quited = True
         await self._request(None, eback, "nvim_command", "quit")
 
         # sometimes the quit command needs an extra Enter, so send it!
         await self._request(None, None, "nvim_input", "\r")
 
         await self._quit_processed.wait()
-        self._quit_processed.clear()  # for next quitting attempt
+        self._neovim_being_quited = False
+        self._quit_processed.clear()  # for a possible next quitting attempt
         return holder[0]
 
     async def call(self, method, *params):
@@ -161,7 +164,11 @@ class NvimInterface:
         # type (0 == request), msgid, method, params
         payload = msgpack.packb([0, self._cb_counter, method.encode("ascii"), params])
         trace("Sending request id=%d method=%r params=%s", self._cb_counter, method, params)
-        await self._loop.sock_sendall(self._client, payload)
+        try:
+            await self._loop.sock_sendall(self._client, payload)
+        except BrokenPipeError:
+            if not self._neovim_being_quited and not self._neovim_already_finished:
+                raise
 
     def _read_messages(self):
         """Get messages from nvim."""
