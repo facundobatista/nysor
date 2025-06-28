@@ -1,5 +1,4 @@
 fase 1
-- nombre del proyecto?? y agregar "headers copyright" en los archivos
 - fixear / anotar los FIXME y XXXs
 - anotar en el README todo lo que hace "hoy", y las siguientes fases
 
@@ -10,7 +9,7 @@ fase 2
 
 fase 3
 - que abra más de un archivo
-- que al abrirlo de terminal, decia:
+- que al abrirlo de terminal, decida:
     - si es un dir, con treeview (si había sucedio antes, que recuerde ventanas abiertas)
     - si es un file, sin treeview
     - si nada, "vacio sin treeview"

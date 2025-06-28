@@ -1,4 +1,7 @@
-# FIXME: copyright notices in all files
+# Copyright 2025 Facundo Batista
+# Licensed under the Apache v2 License
+# For further info, check https://github.com/facundobatista/nysor
+
 """Receive, process, and manage all notifications from Neovim."""
 
 import logging
