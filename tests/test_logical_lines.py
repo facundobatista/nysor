@@ -1,7 +1,7 @@
 
 import pytest
 
-from vym.logical_lines import LogicalLines, LogicalChar
+from nysor.logical_lines import LogicalLines, LogicalChar
 
 
 def create_trivial_grid(*lines_content):

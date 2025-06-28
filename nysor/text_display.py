@@ -23,7 +23,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
 
-from vym.logical_lines import LogicalLines, CharFormat, CharUnderline
+from nysor.logical_lines import LogicalLines, CharFormat, CharUnderline
 
 logger = logging.getLogger(__name__)
 

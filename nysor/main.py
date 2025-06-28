@@ -17,9 +17,9 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from vym.nvim_interface import NvimInterface
-from vym.nvim_notifications import NvimNotifications
-from vym.text_display import TextDisplay
+from nysor.nvim_interface import NvimInterface
+from nysor.nvim_notifications import NvimNotifications
+from nysor.text_display import TextDisplay
 
 # FIXME: isolate some of this, includeing setup in nviminterace and below because of cmd line to a separate module
 logging.basicConfig(
@@ -39,10 +39,10 @@ def futurize(async_function):
 
     return blocking_function
 
-class Vym(QMainWindow):
+class MainApp(QMainWindow):
     def __init__(self, loop, path_to_open, nvim_exec_path):
         super().__init__()
-        logger.info("Starting Vym")
+        logger.info("Starting Nysor")
         self._closing = 0
         self.nvim_notifs = NvimNotifications(self)
 
@@ -271,7 +271,7 @@ class Vym(QMainWindow):
 
 def main(loglevel, nvim_exec_path, path_to_open):
     """Main entry point."""
-    logging.getLogger("vym").setLevel(loglevel)
+    logging.getLogger("nysor").setLevel(loglevel)
 
     app = qasync.QApplication(sys.argv)
 
@@ -282,7 +282,7 @@ def main(loglevel, nvim_exec_path, path_to_open):
     app_close_event = asyncio.Event()
     app.aboutToQuit.connect(app_close_event.set)
 
-    main_window = Vym(event_loop, path_to_open, nvim_exec_path)
+    main_window = MainApp(event_loop, path_to_open, nvim_exec_path)
     main_window.show()
 
     with event_loop:

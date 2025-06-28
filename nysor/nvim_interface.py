@@ -11,7 +11,7 @@ import msgpack
 
 # the socket path to communicate with Neovim
 # FIXME: make this more unique
-_SOCK_PATH = "/tmp/_vymsubnvim.s"
+_SOCK_PATH = "/tmp/_nysorsubnvim.s"
 
 # some Neovim translation constants
 _EXT_TYPE_CODES = {
