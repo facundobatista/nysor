@@ -21,7 +21,7 @@ In other words, Nysor does not really *edit* the file, it's Neovim, and Neovim i
 Currently, version 0.1, it's just a window with the editor inside. There is nothing extra so far, but all the basics should work. It may have rough edges, though (there are even two buttons for debugging purposes); see below what to expect in the future.
 
 <div align="center">
-  <img src="media/sshot1.png" alt="Screenshot showing a simple GUI" width="400"/>
+  <img src="media/sshot1.png" alt="Screenshot showing a simple GUI" width="600"/>
   <p><em>Default init message (the clear background is because of my Neovim config, not a GUI decision)</em></p>
 </div>
 
