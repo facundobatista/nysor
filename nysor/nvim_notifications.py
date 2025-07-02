@@ -56,20 +56,20 @@ class NvimNotifications:
     def _n__grid_clear(self, args):
         """Clear the grid."""
         (grid_id,) = args
-        assert grid_id == 1  # is it always 1? when do we have more than one?
+        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.clear()
 
     def _n__grid_cursor_goto(self, args):
         """Resize a grid."""
         grid_id, row, col = args
-        assert grid_id == 1  # is it always 1? when do we have more than one?
+        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.set_cursor(row, col)
 
     def _n__grid_line(self, *args):
         """Expose a line in the grid."""
         for item in args:
             grid, row, col_start, cells, wrap = item
-            assert grid == 1  # same question we do in grid_resize
+            assert grid == 1  # FIXME.90: same question we do in grid_resize
 
             # note we ignore "wrap", couldn't find proper utility for it
             self.text_display.write_grid(row, col_start, cells)
@@ -77,13 +77,13 @@ class NvimNotifications:
     def _n__grid_resize(self, args):
         """Resize a grid."""
         grid_id, width, height = args
-        assert grid_id == 1  # is it always 1? when do we have more than one?
+        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.resize_view((width, height))
 
     def _n__grid_scroll(self, args):
         """Scroll a grid."""
         grid_id, top, bottom, left, right, rows, cols = args
-        assert grid_id == 1  # is it always 1? when do we have more than one?
+        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.scroll((top, bottom, rows), (left, right, cols))
 
     def _n__hl_attr_define(self, *args):
@@ -153,7 +153,7 @@ class NvimNotifications:
         """Set the icon, if any."""
         (icon,) = param
         if icon:
-            logger.warning("[NvimManager] FIXME! need to implement set icon with %r", icon)
+            logger.warning("[NvimManager] need to implement set icon with %r", icon)
 
     def _n__set_title(self, param):
         """Set title."""
@@ -163,7 +163,7 @@ class NvimNotifications:
     def _n__win_viewport(self, args):
         """Information for the GUI viewport."""
         grid, objinfo, topline, botline, curline, curcol, line_count, scroll_delta = args
-        # FIXME: ignore grid and objinfo so far, need to revisit this when multiwindow
+        # FIXME.90: ignore grid and objinfo so far, need to revisit this when multiwindow
 
         # Note: can't find use to scroll_delta (maybe for smooth scroolbar?)
         self.main_window.adjust_viewport(topline, botline, line_count, curcol)

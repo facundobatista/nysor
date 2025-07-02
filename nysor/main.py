@@ -24,13 +24,15 @@ from nysor.nvim_interface import NvimInterface
 from nysor.nvim_notifications import NvimNotifications
 from nysor.text_display import TextDisplay
 
-# FIXME: isolate some of this, includeing setup in nviminterace and below because of cmd line to a separate module
+# FIXME.06: isolate some of this, includeing setup in nviminterace and below because of
+# cmd line to a separate module
 logging.basicConfig(
-    format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s', datefmt='%H:%M:%S', stream=sys.stdout)
+    format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s',
+    datefmt='%H:%M:%S', stream=sys.stdout)
 logger = logging.getLogger(__name__)
 print("=======++ ++====== MAIN", __name__)
-# FIXME: replace prints
-# FIXME: foffing?
+# FIXME.06: replace prints
+# FIXME.06: foffing?
 
 
 def futurize(async_function):
@@ -41,6 +43,7 @@ def futurize(async_function):
         asyncio.create_task(coro)
 
     return blocking_function
+
 
 class MainApp(QMainWindow):
     def __init__(self, loop, path_to_open, nvim_exec_path):
@@ -83,16 +86,13 @@ class MainApp(QMainWindow):
         # rest of vertical widgets
         self.main_layout.addWidget(self.h_scroll)
 
-        # FIXME: dejar esto para entender que funciona
-        self.button = QPushButton("Haz clic aquí", self)
+        # FIXME.91: dejar esto para entender que funciona
+        self.button = QPushButton("Click here for a blocking call", self)
         self.button.clicked.connect(self.test_action)
         self.main_layout.addWidget(self.button)
-
         self.button2 = QPushButton("Run async task", self)
         self.button2.clicked.connect(lambda: asyncio.create_task(self.async_task()))
         self.main_layout.addWidget(self.button2)
-
-        self.adjustSize()  # FIXME
 
     async def setup_nvim(self, path_to_open):
         """Set up Neovim."""
@@ -107,26 +107,13 @@ class MainApp(QMainWindow):
         await self.nvi.call("nvim_ui_attach", 80, 20, nvim_config)
 
         if path_to_open is not None:
-            # FIXME: qué onda "-" para stdin?
+            # FIXME.92: properly support "-" to read from stdin
             cmd = {"cmd": "edit", "args": [path_to_open]}
             opts = {"output": False}  # don't capture output
             await self.nvi.call("nvim_cmd", cmd, opts)
 
     def test_action(self):
-        print("Botón de PyQt6 presionado")
-
-        #fmt = QTextCharFormat()
-        #fmt.setForeground(QColor("blue"))
-        #fmt.setBackground(QColor("yellow"))
-
-        ## hacks
-        #self.text_display.lines[3] = (4, 0, [(" 0123456789" * 8, fmt)])
-        #self.text_display.lines[5] = (5, 0, [(" Moño g 昔 ばなし CULO", fmt)])
-
-        #fmt = QTextCharFormat()
-        #fmt.setForeground(QColor("black"))
-        #fmt.setBackground(QColor("white"))
-        #self.text_display.lines[6] = (6, 0, [(" emoji 😆d", fmt)])
+        print("PyQt6 button pressed")
 
     async def async_task(self):
         result = await self.nvi.call("nvim_list_uis")
@@ -174,7 +161,6 @@ class MainApp(QMainWindow):
 
         if self._closing == 1:
             # the event was received again in the middle of internal closing, keep ignoring it;
-            # FIXME: let's put a "timeout" here and only keep ignoring if timeout didn't happen
             event.ignore()
             return
 
@@ -185,7 +171,7 @@ class MainApp(QMainWindow):
 
     def present_context_window(self):
         """Present a context window with some options for the user."""
-        # FIXME
+        # FIXME.93
         print("============ MOUSE context window!!")
 
     @futurize
@@ -206,7 +192,7 @@ class MainApp(QMainWindow):
             self.v_scroll.setValue(topline)
 
         # only if not wrapping, using current column but also queried line lengths
-        # FIXME: acá en las opciones se puede pasar el "scope", qué ventana, revisitar cuando
+        # FIXME.90: a "scope" can be given here, revisit this when we have multiple windows
         # tengamos muchas ventanas
         is_wrapping = await self.nvi.call("nvim_get_option_value", "wrap", {})
         if is_wrapping:
@@ -216,7 +202,7 @@ class MainApp(QMainWindow):
             return
 
         # get the lengths of lines that are currently shown
-        buf = 0  # FIXME: why 0?
+        buf = 0  # FIXME.90: why 0? first buffer per window? revisit when multiple windows
         start = topline + 1  # getbufline's first line is 1
         end = botline - 1  # botline is the "next line, out of the view"
         cmd = f"map(getbufline({buf}, {start}, {end}), {{key, val -> strlen(val)}})"
@@ -231,7 +217,7 @@ class MainApp(QMainWindow):
             self.h_scroll.setEnabled(True)
             self.h_scroll.setMaximum(max_line)
             win_info = await self.nvi.call("nvim_eval", "getwininfo()")
-            assert len(win_info) == 1  # FIXME: multiventana?
+            assert len(win_info) == 1  # FIXME.90: check if this is true when multiple windows
             leftcol = win_info[0]["leftcol"]
             print("=====++=++======= left col", leftcol)
             self.h_scroll.setPageStep(display_width)

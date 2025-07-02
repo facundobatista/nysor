@@ -52,9 +52,46 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 
 These are the items lousely grouped to get there:
 
-FIXME
-- fixear / anotar los FIXME y XXXs
-- entender comportamiento cuando "se muere", qué pasa con "temp de seguridad"
+**For 0.2:**
+
+- FIXME.01. use a constant for the TRACE log level
+
+- FIXME.02. make "more unique" the socket path used to communicate with Neovim subprocess
+
+**For 0.3:**
+
+- FIXME.03. do not default to white background when line is empty, use default format
+
+- FIXME.04. improve undercurl drawing
+
+**For 0.4:**
+
+- FIXME.05. pre-process and cache the Neovim modes: faster, probably cheaper in memory, and detect upfront any attribute not supported
+
+**For 0.5:**
+
+- FIXME.06. isolate logger configuration, maybe switch to foffing, clean print lines converting some to log calls
+
+**For 0.6:**
+
+- present an error window if a `nvim` executable is not Found
+    - include instructions to install it
+    - not yet configurable, but run it with `--nvim`
+
+**For 0.7:**
+
+- Include the icon, so it's shown in the window decoration
+
+- complete "GUI window"
+    - add a very clean menu
+    - File: Exit, About
+    - the About should present name, icon, and versions for Nysor *and* the nvim it's using
+
+**For 1.0:**
+
+- Think about "distribution"
+    - upload it to PyPI and check `uvx` and `fades` work to run it
+    - package it with `pyempaq`
 
 
 ## After 1.0
@@ -70,11 +107,13 @@ The path after that is less descriptive. The following are the big items I want 
 - add a treeview in the left of the window
     - simple, showing the directory where the process is run
     - no further functionality so far
-    - move the "debug buttons" to that left pane
+- remove the "debug buttons"
+    - FIXME.91
 
 **For version 3:**
 - it should open more than a file if it's given in the command line
-- each file should be a separate window in the "right pane zone"
+    - FIXME.90
+    - each file should be a separate window in the "right pane zone"
 - double clicking in the tree view should also edit the file
 - when open from a terminal, the layout should change according to the indicated parameters
     - if it's one or more files, open them as (multiple) windows, without a treeview
@@ -82,11 +121,13 @@ The path after that is less descriptive. The following are the big items I want 
         - if this is not the first time the directory is "opened", it should remember which files were previosly open
     - if nothing is indicated, open it empty, with no treeview
     - if `-` is the parameter, it should open a temporary file with content retrieved from `stdin`, no treeview
+        - FIXME.92
 
 **For version 4:**
 - different Nysor runs should be different processes, but aware of them
     - if you're trying to open the same file twice, it should not, the other editor should get focus
 - add functionality to the contextual window (when you right click on a word)
+    - # FIXME.93
     - to search that token in all the proyect ... maybe also in the project's virtual env?
     - to jump to the definition of that word (function, class, module, etc)
 
@@ -99,3 +140,4 @@ The path after that is less descriptive. The following are the big items I want 
     - overrid automatic detections, like virtualenv directories, linters to run, etc
     - placement of decoration for line length
     - scrollbars behaviour (never, always, dynamic)
+    - nvim exec path

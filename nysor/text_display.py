@@ -170,7 +170,7 @@ class BaseDisplay(QWidget):
 
         action = "press"
         modifier = self._get_button_modifiers(event)
-        grid = 0  # FIXME: may change when multi-edit?
+        grid = 0  # FIXME.90: may change when multi-edit?
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -194,7 +194,7 @@ class BaseDisplay(QWidget):
 
         action = "release"
         modifier = self._get_button_modifiers(event)
-        grid = 0  # FIXME: may change when multi-edit?
+        grid = 0  # FIXME.90: may change when multi-edit?
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -216,7 +216,7 @@ class BaseDisplay(QWidget):
         button_name = "left"
         action = "drag"
         modifier = self._get_button_modifiers(event)
-        grid = 0  # FIXME: may change when multi-edit?
+        grid = 0  # FIXME.90: may change when multi-edit?
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -239,7 +239,7 @@ class BaseDisplay(QWidget):
         dx, dy = qpoint.x(), qpoint.y()
         trigger_limit = 10
         row, col = 0, 0  # seems to be ignored
-        grid = 0  # FIXME: may change when multi-edit?
+        grid = 0  # FIXME.90: may change when multi-edit?
 
         if abs(dx) > trigger_limit:
             action = "right" if dx > 0 else "left"
@@ -402,13 +402,10 @@ class TextDisplay(BaseDisplay):
             self.lines.scroll_vertical(top, bottom, delta)
 
         left, right, delta = horizontal
-        assert delta == 0  # FIXME: need to implement!!
-        if delta:
-            self.lines.scroll_horizontal(left, right, delta)
+        assert delta == 0  # need to implement if the situation really arises
 
     def flush(self):
-        """FIXME."""
-        print("========= Flushhhhhhhhh!")
+        """Update the window."""
         self.update()
 
     def set_cursor(self, row, col):
@@ -472,7 +469,7 @@ class TextDisplay(BaseDisplay):
             logical_line = self.lines.get(row)
             if logical_line is None:
                 rect = QRectF(0, base_y, self.width(), cell_height)
-                # FIXME: this should NOT be white, what if user has different background?
+                # FIXME.03: this should NOT be white, what if user has different background?
                 painter.fillRect(rect, Qt.GlobalColor.white)
                 continue
 
@@ -566,7 +563,7 @@ class TextDisplay(BaseDisplay):
                 painter.drawLine(base_x, underline_y + 1, base_x + slot_width, underline_y + 1)
 
             case "undercurl":
-                # FIXME: improve drawing
+                # FIXME.04: improve drawing
                 path = QPainterPath()
                 amplitude = 1
                 period = 6
@@ -587,7 +584,7 @@ class TextDisplay(BaseDisplay):
 
     def change_mode(self, mode_info):
         """Change mode."""
-        # FIXME: consider a model where we assert what attributes we implement (instead of
+        # FIXME.05: consider a model where we assert what attributes we implement (instead of
         # copying and changing the dict) -- even we can declare attributes here and nvimmanager
         # will assert (and maybe alert) when stuff is informed AND NOT EVERY TIME HERE
 
@@ -603,9 +600,9 @@ class TextDisplay(BaseDisplay):
 
         if "attr_id_lm" in mode_info:
             attr_id_lm = mode_info.pop("attr_id_lm")
-            assert attr_id_lm == 0  # FIXME: we need to implement this?
+            assert attr_id_lm == 0  # need to implement if the situation really arises
 
-        # FIXME: consider a model where all this processing is done when configuration is
+        # FIXME.05: consider a model where all this processing is done when configuration is
         # received originally, so the gap between "neovim config" and our "internal config" is
         # done once, and mismatches are detected earlier
         if "blinkon" in mode_info:
@@ -631,8 +628,10 @@ class TextDisplay(BaseDisplay):
         elif cursor_shape == "vertical":
             self.cursor_painter = partial(self._paint_cursor_vertical, cursor_attr_id, cursor_perc)
         else:
-            # FIXME
-            print("============== CURSOR forma!!!", cursor_shape, cursor_perc)
+            # need to implement if the situation really arises
+            raise NotImplementedError(
+                "Cursor shape not currently supported: {cursor_shape!r} ({cursor_perc!r})"
+            )
 
         if mode_info:
             logger.warning("Some mode change info remained unprocessed: %s", mode_info)

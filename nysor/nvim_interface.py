@@ -14,7 +14,7 @@ import time
 import msgpack
 
 # the socket path to communicate with Neovim
-# FIXME: make this more unique
+# FIXME.02: make this more unique
 _SOCK_PATH = "/tmp/_nysorsubnvim.s"
 
 # some Neovim translation constants
@@ -63,6 +63,8 @@ class NvimInterface:
         self._neovim_being_quited = False
 
         if os.path.exists(_SOCK_PATH):
+            # FIXME.02: support this, but do not remove it, just log in warning and select another
+            # (shouldn't really happen, if paths are "unique")
             os.remove(_SOCK_PATH)
 
         logger.info("Starting Neovim process")

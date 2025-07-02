@@ -30,7 +30,7 @@ if args.quiet:
 elif args.verbose:
     loglevel = logging.VERBOSE
 elif args.trace:
-    loglevel = 5  # FIXME not a constant!
+    loglevel = 5  # FIXME.01 not a constant!
 else:
     loglevel = logging.INFO
 
