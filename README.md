@@ -26,18 +26,18 @@ Currently, version 0.1, it's just a window with the editor inside. There is noth
 You call it from the project (no packaging yet), but previously you need to create a virtualenv; e.g.:
 
 ```
-.../nysor$ python3 -m venv env
-.../nysor$ source env/bin/activate
-(env) .../nysor$ pip install -r requirements.txt
-(env) .../nysor$ python -m nysor
+…/nysor$ python3 -m venv env
+…/nysor$ source env/bin/activate
+(env) …/nysor$ pip install -r requirements.txt
+(env) …/nysor$ python -m nysor
 ```
 
 You can indicate it to open a file to edit:
 ```
-(env) .../nysor$ python -m nysor myfile.txt
+(env) …/nysor$ python -m nysor myfile.txt
 ```
 
-By default, currently, some INFO is sent to the terminal, you can reduce the logs verbosity with `-q/--quiet`, increase it with `-v/--verbose`, or even use `-t/--trace` to see everything that is going one under the hood.
+By default, currently, some INFO is sent to the terminal, you can reduce the logs verbosity with `-q/--quiet`, increase it with `-v/--verbose`, or even use `-t/--trace` to see everything that is going one under the hood (specially the interaction with Neovim through the socket).
 
 Nysor will use `nvim` if it's in the PATH, but you can always specify the binary location using `--nvim`.
 
@@ -45,6 +45,7 @@ Nysor will use `nvim` if it's in the PATH, but you can always specify the binary
 # Roadmap
 
 These are the plans for the future. They are quite informal, the idea is to follow this list, but we can reorder stuff if needed, of if something is requested.
+
 
 ## The path to 1.0
 
@@ -55,13 +56,11 @@ These are the items lousely grouped to get there:
 **For 0.2:**
 
 - FIXME.01. use a constant for the TRACE log level
-
 - FIXME.02. make "more unique" the socket path used to communicate with Neovim subprocess
 
 **For 0.3:**
 
 - FIXME.03. do not default to white background when line is empty, use default format
-
 - FIXME.04. improve undercurl drawing
 
 **For 0.4:**
@@ -81,7 +80,6 @@ These are the items lousely grouped to get there:
 **For 0.7:**
 
 - Include the icon, so it's shown in the window decoration
-
 - complete "GUI window"
     - add a very clean menu
     - File: Exit, About
@@ -120,14 +118,17 @@ The path after that is less descriptive. The following are the big items I want 
     - if it's a directory, open it with a treeview based in that directory
         - if this is not the first time the directory is "opened", it should remember which files were previosly open
     - if nothing is indicated, open it empty, with no treeview
-    - if `-` is the parameter, it should open a temporary file with content retrieved from `stdin`, no treeview
+    - if "`-`" is the parameter, it should handle `stdin`
+        - let's see if Neovim supports through API telling it to open stdin
+        - otherwise just make it work: open a temporary file with content retrieved from `stdin` and tell Neovim to use that
+        - no treeview
         - FIXME.92
 
 **For version 4:**
 - different Nysor runs should be different processes, but aware of them
     - if you're trying to open the same file twice, it should not, the other editor should get focus
 - add functionality to the contextual window (when you right click on a word)
-    - # FIXME.93
+    - FIXME.93
     - to search that token in all the proyect ... maybe also in the project's virtual env?
     - to jump to the definition of that word (function, class, module, etc)
 
