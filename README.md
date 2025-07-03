@@ -4,7 +4,7 @@ Yet another graphical interface for Neovim.
 
 Written in Python, with Qt.
 
-Pronounced similar to "visor", the "y" like in "eye"... "n-eye-sor".
+Pronounced similar to "organizer", but without the "orga" and changing the "e" for an "o".
 
 
 # Why another GUI for Neovim?
