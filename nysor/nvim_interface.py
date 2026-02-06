@@ -10,12 +10,9 @@ import os
 import subprocess
 import socket
 import time
+import uuid
 
 import msgpack
-
-# the socket path to communicate with Neovim
-# FIXME.02: make this more unique
-_SOCK_PATH = "/tmp/_nysorsubnvim.s"
 
 # some Neovim translation constants
 _EXT_TYPE_CODES = {
@@ -25,7 +22,6 @@ _EXT_TYPE_CODES = {
 }
 
 logger = logging.getLogger(__name__)
-logging.addLevelName(5, "TRACE")
 
 
 class NeovimError(Exception):
@@ -34,7 +30,7 @@ class NeovimError(Exception):
 
 def trace(msg, *params):
     """Log in trace level with a prefix."""
-    logger.log(5, "[nvim] " + msg, *params)
+    logger.log(logging.TRACE, "[nvim] " + msg, *params)
 
 
 def ext_hook(code, data):
@@ -62,18 +58,14 @@ class NvimInterface:
         self._neovim_already_finished = False
         self._neovim_being_quited = False
 
-        if os.path.exists(_SOCK_PATH):
-            # FIXME.02: support this, but do not remove it, just log in warning and select another
-            # (shouldn't really happen, if paths are "unique")
-            os.remove(_SOCK_PATH)
-
-        logger.info("Starting Neovim process")
+        _sock_path = self._get_unique_sock_path()
+        logger.info("Starting Neovim process, communicating through %r", _sock_path)
         if nvim_exec_path is None:
             nvim_exec_path = "nvim"
-        self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", _SOCK_PATH])
+        self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", _sock_path])
         tini = time.time()
         while True:
-            if os.path.exists(_SOCK_PATH):
+            if os.path.exists(_sock_path):
                 break
             logger.debug("Wait nvim process to start")
             # yes, we block; if we want to go fully async here we need to find out a better
@@ -84,7 +76,7 @@ class NvimInterface:
 
         self._client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._client.setblocking(False)
-        self._client.connect(_SOCK_PATH)
+        self._client.connect(_sock_path)
         self._loop.add_reader(self._client, self._receive_responses)
         logger.info("Neovim setup done")
 
@@ -93,6 +85,16 @@ class NvimInterface:
         self._ui_attached = False
 
         self._msg_unpacker = msgpack.Unpacker(raw=False, ext_hook=ext_hook)
+
+    def _get_unique_sock_path(self):
+        """Return an unique path, validating it's not in disk."""
+        while True:
+            uniqueid = uuid.uuid4().hex
+            path = f"/tmp/nysor-subnvim-{uniqueid}.s"
+            if os.path.exists(path):
+                logger.warning("Found an unique path already in disk: %r", path)
+            else:
+                return path
 
     async def quit(self):
         """Finish neovim and close the process.
