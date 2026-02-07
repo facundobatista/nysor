@@ -193,7 +193,6 @@ class MainApp(QMainWindow):
 
         # only if not wrapping, using current column but also queried line lengths
         # FIXME.90: a "scope" can be given here, revisit this when we have multiple windows
-        # tengamos muchas ventanas
         is_wrapping = await self.nvi.call("nvim_get_option_value", "wrap", {})
         if is_wrapping:
             # just turn off the scroll bar as when wrapping all text will be inside the window
@@ -215,13 +214,12 @@ class MainApp(QMainWindow):
             self.h_scroll.setMaximum(0)
         else:
             self.h_scroll.setEnabled(True)
-            self.h_scroll.setMaximum(max_line)
-            win_info = await self.nvi.call("nvim_eval", "getwininfo()")
-            assert len(win_info) == 1  # FIXME.90: check if this is true when multiple windows
-            leftcol = win_info[0]["leftcol"]
-            print("=====++=++======= left col", leftcol)
             self.h_scroll.setPageStep(display_width)
             self.h_scroll.setMaximum(max_line - 1)
+
+            win_info = await self.nvi.call("nvim_eval", "winsaveview()")
+            leftcol = win_info["leftcol"]
+            print("=====++=++======= left col", leftcol)
             self.h_scroll_last_position = leftcol  # before setting value to ignore later event
             self.h_scroll.setValue(leftcol)
 
@@ -239,7 +237,7 @@ class MainApp(QMainWindow):
             print("=====++=++=============== NO MOV")
             return
         self.v_scroll_last_position = value
-        self.nvi.future_request("nvim_input", abs(delta) * cmdkey)
+        self.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
 
     def horizontal_scroll_changed(self, value):
         """Handle the horizontal scroll bar being modified through the widget."""
