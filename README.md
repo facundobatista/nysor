@@ -59,8 +59,6 @@ These are the items lousely grouped to get there:
 
 **For 0.3:**
 
-- FIXME.03. do not default to white background when line is empty, use default format
-- FIXME.04. improve undercurl drawing
 - bug: something errors out if trying to close the window when not saved
 
 **For 0.4:**

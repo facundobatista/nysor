@@ -1,4 +1,4 @@
-# Copyright 2025 Facundo Batista
+# Copyright 2025-2026 Facundo Batista
 # Licensed under the Apache v2 License
 # For further info, check https://github.com/facundobatista/nysor
 
@@ -468,9 +468,12 @@ class TextDisplay(BaseDisplay):
 
             logical_line = self.lines.get(row)
             if logical_line is None:
+                # no logical line, fill with background default color; note that this value is not
+                # ready at the very start, but it's there soon enough
                 rect = QRectF(0, base_y, self.width(), cell_height)
-                # FIXME.03: this should NOT be white, what if user has different background?
-                painter.fillRect(rect, Qt.GlobalColor.white)
+                default_colors = self.main_window.nvim_notifs.structs.get("default_colors")
+                if default_colors is not None:
+                    painter.fillRect(rect, QColor(default_colors["background"]))
                 continue
 
             for logical_char in logical_line:
@@ -537,39 +540,56 @@ class TextDisplay(BaseDisplay):
 
     def _draw_underline(self, painter, logical_char, base_x, slot_width, base_y, cell_height):
         """Draw underline effect over the text."""
-        underline_y = base_y + cell_height - 3
+        underline_y = int(base_y + cell_height - 1)
 
         match logical_char.format.underline.style:
             case "underline":
-                painter.setPen(QPen(logical_char.format.underline.color))
-                painter.drawLine(base_x, underline_y, base_x + slot_width, underline_y)
+                pen = QPen(logical_char.format.underline.color)
+                pen.setWidth(2)
+                painter.setPen(pen)
+                painter.drawLine(
+                    QPointF(base_x, underline_y),
+                    QPointF(base_x + slot_width, underline_y)
+                )
 
             case "underdotted":
                 pen = QPen(logical_char.format.underline.color)
                 pen.setStyle(Qt.PenStyle.DotLine)
                 painter.setPen(pen)
-                painter.drawLine(base_x, underline_y, base_x + slot_width, underline_y)
+                painter.drawLine(
+                    QPointF(base_x, underline_y),
+                    QPointF(base_x + slot_width, underline_y)
+                )
 
             case "underdashed":
                 pen = QPen(logical_char.format.underline.color)
                 pen.setStyle(Qt.PenStyle.DashLine)
                 painter.setPen(pen)
-                painter.drawLine(base_x, underline_y, base_x + slot_width, underline_y)
+                painter.drawLine(
+                    QPointF(base_x, underline_y),
+                    QPointF(base_x + slot_width, underline_y)
+                )
 
             case "underdouble":
                 pen = QPen(logical_char.format.underline.color)
                 painter.setPen(pen)
-                painter.drawLine(base_x, underline_y - 1, base_x + slot_width, underline_y - 1)
-                painter.drawLine(base_x, underline_y + 1, base_x + slot_width, underline_y + 1)
+                painter.drawLine(
+                    QPointF(base_x, underline_y),
+                    QPointF(base_x + slot_width, underline_y)
+                )
+                painter.drawLine(
+                    QPointF(base_x, underline_y + 3),
+                    QPointF(base_x + slot_width, underline_y + 3)
+                )
 
             case "undercurl":
-                # FIXME.04: improve drawing
                 path = QPainterPath()
                 amplitude = 1
-                period = 6
+                period = 4
+                underline_y += 1
                 path.moveTo(base_x, underline_y)
                 i = 0
-                while base_x + i < base_x + slot_width:
+                while i < slot_width:
                     cx1 = base_x + i + period / 2
                     cy1 = underline_y + (amplitude if (i // period) % 2 == 0 else -amplitude)
                     path.lineTo(cx1, cy1)
@@ -640,6 +660,7 @@ class TextDisplay(BaseDisplay):
         """Get the format for the text. If None, return default colors."""
         # the base is always the default color
         default_colors = self.main_window.nvim_notifs.structs["default_colors"]
+        print("================= default back", default_colors["background"])
         fmt = CharFormat(
             background=QColor(default_colors["background"]),
             foreground=QColor(default_colors["foreground"]),
