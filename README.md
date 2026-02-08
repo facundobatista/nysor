@@ -57,12 +57,6 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 
 These are the items lousely grouped to get there:
 
-**For 0.2:**
-
-- FIXME.02. make "more unique" the socket path used to communicate with Neovim subprocess
-- bug: scroll bar behave weird if editing
-- bug: RuntimeWarning: coroutine 'MainApp.adjust_viewport' was never awaited
-
 **For 0.3:**
 
 - FIXME.03. do not default to white background when line is empty, use default format

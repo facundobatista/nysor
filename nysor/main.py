@@ -35,16 +35,6 @@ print("=======++ ++====== MAIN", __name__)
 # FIXME.06: foffing?
 
 
-def futurize(async_function):
-    """Decorator to convert a blocking function in a async task to run in the future."""
-
-    def blocking_function(*args, **kwargs):
-        coro = async_function(*args, **kwargs)
-        asyncio.create_task(coro)
-
-    return blocking_function
-
-
 class MainApp(QMainWindow):
     def __init__(self, loop, path_to_open, nvim_exec_path):
         super().__init__()
@@ -174,9 +164,11 @@ class MainApp(QMainWindow):
         # FIXME.93
         print("============ MOUSE context window!!")
 
-    @futurize
     async def adjust_viewport(self, topline, botline, line_count, curcol):
-        """Adjust scrollbar according to what Neovim says."""
+        """Adjust scrollbar according to what Neovim says.
+
+        Called from the Neovim layer on viewport changes notifications.
+        """
         display_width, display_height = self.text_display.display_size
 
         # vertical: use information from the viewport

@@ -7,6 +7,8 @@
 import logging
 from typing import Any
 
+from nysor.utils import call_async
+
 logger = logging.getLogger(__name__)
 
 
@@ -166,4 +168,4 @@ class NvimNotifications:
         # FIXME.90: ignore grid and objinfo so far, need to revisit this when multiwindow
 
         # Note: can't find use to scroll_delta (maybe for smooth scroolbar?)
-        self.main_window.adjust_viewport(topline, botline, line_count, curcol)
+        call_async(self.main_window.adjust_viewport, topline, botline, line_count, curcol)
