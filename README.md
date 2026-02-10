@@ -57,37 +57,35 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 
 These are the items lousely grouped to get there:
 
-**For 0.3:**
-
-- bug: something errors out if trying to close the window when not saved
-
 **For 0.4:**
 
 - FIXME.05. pre-process and cache the Neovim modes: faster, probably cheaper in memory, and detect upfront any attribute not supported
-
-**For 0.5:**
-
 - FIXME.06. isolate logger configuration, maybe switch to foffing, clean print lines converting some to log calls
 
-**For 0.6:**
+
+**For 0.5:**
 
 - present an error window if a `nvim` executable is not Found
     - include instructions to install it
     - not yet configurable, but run it with `--nvim`
-
-**For 0.7:**
-
 - Include the icon, so it's shown in the window decoration
+
+
+**For 0.6:**
+
 - complete "GUI window"
     - add a very clean menu
     - File: Exit, About
     - the About should present name, icon, and versions for Nysor *and* the nvim it's using
+- remove the two debug buttons
+
 
 **For 1.0:**
 
 - Think about "distribution"
     - upload it to PyPI and check `uvx` and `fades` work to run it
     - package it with `pyempaq`
+
 
 
 ## After 1.0
@@ -99,10 +97,15 @@ The path after that is less descriptive. The following are the big items I want 
     - add better history and ways to search/filter previous commands
 - try to separate, if possible, the windows for messages from the editor
     - not only from the Neovim *itself* (like `myfile.txt 23L, 10023B written`) but also from plugins, like linters
-    - these windows should be easily resizeable
+    - these windows should be easily resizeable, and with buttons somewhere to turn them on/off
+    - improve error management around "opening a file that was left open previously because of crashing or similar"
 - add a treeview in the left of the window
     - simple, showing the directory where the process is run
-    - no further functionality so far
+    - if double click in a file, it should open a new window/tab with the new buffer
+- support multiple buffers open
+    - switch back and forward clicking on tabs
+    - when going back to a tab, it should check if underneath file changed
+    - support closing properly, each tab or the whole program, asking for the buffers that are not properly saved
 - remove the "debug buttons"
     - FIXME.91
 
