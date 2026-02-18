@@ -59,7 +59,6 @@ These are the items lousely grouped to get there:
 
 **For 0.4:**
 
-- FIXME.05. pre-process and cache the Neovim modes: faster, probably cheaper in memory, and detect upfront any attribute not supported
 - FIXME.06. isolate logger configuration, maybe switch to foffing, clean print lines converting some to log calls
 
 
@@ -103,6 +102,7 @@ The path after that is less descriptive. The following are the big items I want 
     - simple, showing the directory where the process is run
     - if double click in a file, it should open a new window/tab with the new buffer
 - support multiple buffers open
+    - FIXME.90
     - switch back and forward clicking on tabs
     - when going back to a tab, it should check if underneath file changed
     - support closing properly, each tab or the whole program, asking for the buffers that are not properly saved
@@ -111,7 +111,6 @@ The path after that is less descriptive. The following are the big items I want 
 
 **For version 3:**
 - it should open more than a file if it's given in the command line
-    - FIXME.90
     - each file should be a separate window in the "right pane zone"
 - double clicking in the tree view should also edit the file
 - when open from a terminal, the layout should change according to the indicated parameters

@@ -199,6 +199,8 @@ class MainApp(QMainWindow):
         cmd = f"map(getbufline({buf}, {start}, {end}), {{key, val -> strlen(val)}})"
         line_lengths = await self.nvi.call("nvim_eval", cmd)
         print(f"====++=++=== viewport horz {is_wrapping=} {curcol=} {line_lengths=}")
+        if not line_lengths:
+            return
 
         max_line = max(line_lengths)
         if max_line <= display_width:

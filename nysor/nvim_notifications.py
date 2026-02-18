@@ -5,11 +5,49 @@
 """Receive, process, and manage all notifications from Neovim."""
 
 import logging
+from collections import defaultdict
 from typing import Any
 
 from nysor.utils import call_async
 
 logger = logging.getLogger(__name__)
+
+
+class DynamicCache:
+    """A cache that is cleaned up when any of the section labels change."""
+
+    def __init__(self):
+        self._data = {}
+        self._labels = defaultdict(set)
+
+    def get(self, labels, key):
+        """Get the key from the cache indicated by labels.
+
+        This is the critical path. The rest of the methods need to accomodate for this
+        to be as fast as possible.
+        """
+        print("============ Dyn get", (labels, key))
+        # the real cache is under the tuple of labels
+        cache = self._data.setdefault(labels, {})
+        return cache.get(key)
+
+    def set(self, labels, key, value):
+        """Store the value under given key in the cache indicated by labels."""
+        print("============ Dyn store", (labels, key, value))
+        # store
+        cache = self._data.setdefault(labels, {})
+        cache[key] = value
+
+        # also annotate the labels for future cleanup
+        for label in labels:
+            self._labels[label].add(labels)
+        print("============ Dyn labels", self._labels)
+
+    def clean(self, label):
+        """Clean all caches for all set of labels where this label is present."""
+        print("============ Dyn clean", repr(label))
+        for section in self._labels[label]:
+            self._data[section].clear()
 
 
 class NvimNotifications:
@@ -21,8 +59,12 @@ class NvimNotifications:
     def __init__(self, main_window):
         self.main_window = main_window
         self.text_display = None  # will be set before first usage
-        self.structs = {}
         self.options = {}
+
+        # this two currently work "in tandem", we may want to unify them under the same structure
+        # in the future
+        self.structs = {}
+        self.dyncache = DynamicCache()
 
     def handler(self, method: str, parameters: list[Any]):
         """Handle a notification from Neovim."""
@@ -50,6 +92,7 @@ class NvimNotifications:
             "background": rgb_bg,
             "special": rgb_sp,
         })
+        self.dyncache.clean("default_colors")
 
     def _n__flush(self, _):
         """Clear the grid."""
@@ -102,6 +145,7 @@ class NvimNotifications:
         for hl_id, rgb_attr, _, info in args:  # third value is ignored as it's for terminals
             assert not info
             hl_attrs[hl_id] = rgb_attr
+        self.dyncache.clean("hl-attrs")
 
     def _n__hl_group_set(self, *args):
         """Set highlight groups.
@@ -111,10 +155,12 @@ class NvimNotifications:
         hl_groups = self.structs.setdefault("hl-groups", {})
         for group_name, hl_id in args:
             hl_groups[group_name] = hl_id
+        self.dyncache.clean("hl-groups")
 
     def _n__mode_change(self, args):
         """Information about cursor mode."""
         mode, mode_idx = args
+        print("================== mode raw", repr(mode), repr(mode_idx))
         # we ignore the mode idx as we stored in the modes in a dict using the name
         mode_info = self.structs["mode-info"][mode]
         self.text_display.change_mode(mode_info)
@@ -132,6 +178,7 @@ class NvimNotifications:
             info[name] = mi
 
         self.structs.setdefault("mode-info", {}).update(info)
+        self.dyncache.clean("mode-info")
 
     def _n__mouse_on(self, args):
         """Properly ignored."""

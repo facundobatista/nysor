@@ -299,6 +299,8 @@ class TextDisplay(BaseDisplay):
 
         # cache to hold conversions between Neovim's highlight info and Qt formats
         self.nvimhl_to_qtfmt = {}
+        # cache to hold mode_info processed structures
+        self.mode_info_structs = {}
 
     def window_resize(self):
         """Inform Neovim of new window size."""
@@ -402,6 +404,7 @@ class TextDisplay(BaseDisplay):
             self.lines.scroll_vertical(top, bottom, delta)
 
         left, right, delta = horizontal
+        # FIXME.06 log in error with a prefix
         assert delta == 0  # need to implement if the situation really arises
 
     def flush(self):
@@ -602,14 +605,10 @@ class TextDisplay(BaseDisplay):
                     f"Invalid underline style: {logical_char.format.underline.style!r}"
                 )
 
-    def change_mode(self, mode_info):
-        """Change mode."""
-        # FIXME.05: consider a model where we assert what attributes we implement (instead of
-        # copying and changing the dict) -- even we can declare attributes here and nvimmanager
-        # will assert (and maybe alert) when stuff is informed AND NOT EVERY TIME HERE
-
+    def _process_mode_info(self, mode_info):
+        """Prepare a structure after mode_info for faster recurrent usage."""
+        result_struct = {}
         mode_info = mode_info.copy()  # copy because will consume
-        print("======== cmode!", mode_info)
 
         # this is just discarded (if present), as neovim documentation says "to be implemented"
         mode_info.pop("mouse_shape", None)
@@ -620,17 +619,16 @@ class TextDisplay(BaseDisplay):
 
         if "attr_id_lm" in mode_info:
             attr_id_lm = mode_info.pop("attr_id_lm")
+            # FIXME.06 log in error with a prefix
             assert attr_id_lm == 0  # need to implement if the situation really arises
 
-        # FIXME.05: consider a model where all this processing is done when configuration is
-        # received originally, so the gap between "neovim config" and our "internal config" is
-        # done once, and mismatches are detected earlier
         if "blinkon" in mode_info:
             # consider that if one is present, the three will be
             blinkon = mode_info.pop("blinkon")
             blinkoff = mode_info.pop("blinkoff")
             blinkwait = mode_info.pop("blinkwait")
             if blinkon or blinkoff or blinkwait:
+                # FIXME.06 log in error with a prefix
                 logger.warning(
                     "Cursor blinking not supported yet - on=%d off=%d wait=%d",
                     blinkon,
@@ -644,23 +642,51 @@ class TextDisplay(BaseDisplay):
         cursor_attr_id = mode_info.pop("attr_id", 0)
         print("========= CURSOR color", cursor_attr_id)
         if cursor_shape == "block":
-            self.cursor_painter = partial(self._paint_cursor_block, cursor_attr_id)
+            cursor_painter = partial(self._paint_cursor_block, cursor_attr_id)
         elif cursor_shape == "vertical":
-            self.cursor_painter = partial(self._paint_cursor_vertical, cursor_attr_id, cursor_perc)
+            cursor_painter = partial(self._paint_cursor_vertical, cursor_attr_id, cursor_perc)
         else:
+            # FIXME.06 log in error with a prefix
             # need to implement if the situation really arises
             raise NotImplementedError(
                 "Cursor shape not currently supported: {cursor_shape!r} ({cursor_perc!r})"
             )
+        result_struct["cursor_painter"] = cursor_painter
 
         if mode_info:
+            # FIXME.06 log in error with a prefix
             logger.warning("Some mode change info remained unprocessed: %s", mode_info)
+
+        return result_struct
+
+    def change_mode(self, mode_info):
+        """Change mode to the specified information.
+
+        The parsing for each mode info happens once, producing a cached structure to
+        speed up recurrent calls with same info.
+        """
+        # get it from the cache or process
+        cache_key = tuple(mode_info.items())
+        struct = self.mode_info_structs.get(cache_key)
+        if struct is None:
+            struct = self._process_mode_info(mode_info)
+            self.mode_info_structs[cache_key] = struct
+
+        # use the structure
+        self.cursor_painter = struct["cursor_painter"]
 
     def _build_text_format(self, hl_id: int | None) -> CharFormat:
         """Get the format for the text. If None, return default colors."""
+        # check if in dynamic cache
+        dyncache_labels = ("default_colors", "hl-attrs")
+        fmt = self.main_window.nvim_notifs.dyncache.get(dyncache_labels, hl_id)
+        if fmt is not None:
+            print("========= text format CACHED", hl_id)
+            return fmt
+
+        print("========= build text format", hl_id)
         # the base is always the default color
         default_colors = self.main_window.nvim_notifs.structs["default_colors"]
-        print("================= default back", default_colors["background"])
         fmt = CharFormat(
             background=QColor(default_colors["background"]),
             foreground=QColor(default_colors["foreground"]),
@@ -704,6 +730,8 @@ class TextDisplay(BaseDisplay):
             if hl:
                 logger.warning("Some text format remained unprocessed: %s", hl)
 
+        # set the format in dynamic cache
+        self.main_window.nvim_notifs.dyncache.set(dyncache_labels, hl_id, fmt)
         return fmt
 
     def write_grid(self, row: int, col: int, sequence: list[Any]):
