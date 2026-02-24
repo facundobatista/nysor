@@ -57,11 +57,6 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 
 These are the items lousely grouped to get there:
 
-**For 0.4:**
-
-- FIXME.06. isolate logger configuration, maybe switch to foffing, clean print lines converting some to log calls
-
-
 **For 0.5:**
 
 - present an error window if a `nvim` executable is not Found

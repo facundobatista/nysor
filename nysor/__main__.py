@@ -3,24 +3,25 @@
 # For further info, check https://github.com/facundobatista/nysor
 
 import argparse
-import logging
 
+from nysor.logtools import logsetup, LOG_LEVELS
 from nysor.main import main
 
-# add trace level to logging
-logging.addLevelName(5, "TRACE")
-logging.TRACE = 5
-
-# prepare argument parsing
+# mutually exclusive verbosity levels
 parser = argparse.ArgumentParser()
 loggroup = parser.add_mutually_exclusive_group()
-loggroup.add_argument("-q", "--quiet", action="store_true", help="Set logging to be quiet.")
-loggroup.add_argument("-v", "--verbose", action="store_true", help="Set logging to verbose.")
-loggroup.add_argument(
-    "-t", "--trace", action="store_true",
-    help="Set logging for tracing (beware, there may be too many messages)."
-)
+for option, (_, helpmsg) in LOG_LEVELS.items():
+    if option:
+        loggroup.add_argument(
+            f"-{option[0]}",
+            f"--{option}",
+            action="store_const",
+            const=option,
+            dest="loglevel",
+            help=helpmsg
+        )
 
+# the rest of argument parsing
 parser.add_argument("--nvim", action="store", help="Path to the Neovim executable.")
 parser.add_argument(
     "path", action="store", nargs="?", default=None,
@@ -29,13 +30,5 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-if args.quiet:
-    loglevel = logging.WARNING
-elif args.verbose:
-    loglevel = logging.DEBUG
-elif args.trace:
-    loglevel = logging.TRACE
-else:
-    loglevel = logging.INFO
-
-main(loglevel, args.nvim, args.path)
+logsetup(args.loglevel)
+main(args.nvim, args.path)

@@ -20,19 +20,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
+from nysor.logtools import log_notdone
 from nysor.nvim_interface import NvimInterface
 from nysor.nvim_notifications import NvimNotifications
 from nysor.text_display import TextDisplay
 
-# FIXME.06: isolate some of this, includeing setup in nviminterace and below because of
-# cmd line to a separate module
-logging.basicConfig(
-    format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s',
-    datefmt='%H:%M:%S', stream=sys.stdout)
 logger = logging.getLogger(__name__)
-print("=======++ ++====== MAIN", __name__)
-# FIXME.06: replace prints
-# FIXME.06: foffing?
 
 
 class MainApp(QMainWindow):
@@ -91,7 +84,7 @@ class MainApp(QMainWindow):
         major = version["major"]
         minor = version["minor"]
         patch = version["patch"]
-        logger.info("Neovim API info: version %s.%s.%s", major, minor, patch)
+        logger.info("Neovim API info: version {}.{}.{}", major, minor, patch)
 
         nvim_config = {"ext_linegrid": True}
         await self.nvi.call("nvim_ui_attach", 80, 20, nvim_config)
@@ -103,11 +96,12 @@ class MainApp(QMainWindow):
             await self.nvi.call("nvim_cmd", cmd, opts)
 
     def test_action(self):
-        print("PyQt6 button pressed")
+        print("==== PyQt6 button pressed")
+        log_notdone("test msg", foo=3, bar="xxtra")
 
     async def async_task(self):
         result = await self.nvi.call("nvim_list_uis")
-        print("=========== resp, result", repr(result))
+        print("=========== Async task! result:", repr(result))
 
     async def _quit(self):
         """Close the GUI after Neovim is down."""
@@ -141,7 +135,7 @@ class MainApp(QMainWindow):
         The event is ignored so the "real closing" is interrupted, which is triggered later
         when Neovim is already down.
         """
-        logger.debug("Close requested; current state %d", self._closing)
+        logger.debug("Close requested; current state {:d}", self._closing)
         if self._closing == 0:
             # start to close; ignore the event so GUI is still alive, but start internal procedures
             self._closing = 1
@@ -162,7 +156,7 @@ class MainApp(QMainWindow):
     def present_context_window(self):
         """Present a context window with some options for the user."""
         # FIXME.93
-        print("============ MOUSE context window!!")
+        log_notdone("Mouse context window!")
 
     async def adjust_viewport(self, topline, botline, line_count, curcol):
         """Adjust scrollbar according to what Neovim says.
@@ -172,7 +166,6 @@ class MainApp(QMainWindow):
         display_width, display_height = self.text_display.display_size
 
         # vertical: use information from the viewport
-        print(f"====++=++== viewport vert {topline=} {botline=} {line_count=}")
         if topline == 0 and line_count <= display_height:
             self.v_scroll.setEnabled(False)
             self.v_scroll.setMaximum(0)
@@ -198,7 +191,6 @@ class MainApp(QMainWindow):
         end = botline - 1  # botline is the "next line, out of the view"
         cmd = f"map(getbufline({buf}, {start}, {end}), {{key, val -> strlen(val)}})"
         line_lengths = await self.nvi.call("nvim_eval", cmd)
-        print(f"====++=++=== viewport horz {is_wrapping=} {curcol=} {line_lengths=}")
         if not line_lengths:
             return
 
@@ -213,14 +205,12 @@ class MainApp(QMainWindow):
 
             win_info = await self.nvi.call("nvim_eval", "winsaveview()")
             leftcol = win_info["leftcol"]
-            print("=====++=++======= left col", leftcol)
             self.h_scroll_last_position = leftcol  # before setting value to ignore later event
             self.h_scroll.setValue(leftcol)
 
     def vertical_scroll_changed(self, value):
         """Handle the vertical scroll bar being modified through the widget."""
         delta = value - self.v_scroll_last_position
-        print("=====++=++========= scroll vertical:", value, delta)
         if delta > 0:
             # down
             cmdkey = "\x05"
@@ -228,7 +218,6 @@ class MainApp(QMainWindow):
             # up
             cmdkey = "\x19"
         else:
-            print("=====++=++=============== NO MOV")
             return
         self.v_scroll_last_position = value
         self.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
@@ -236,7 +225,6 @@ class MainApp(QMainWindow):
     def horizontal_scroll_changed(self, value):
         """Handle the horizontal scroll bar being modified through the widget."""
         delta = value - self.h_scroll_last_position
-        print("=====++=++========= scroll horizontal:", value, delta)
         if delta > 0:
             # right
             cmdkey = "zl"
@@ -244,16 +232,13 @@ class MainApp(QMainWindow):
             # left
             cmdkey = "zh"
         else:
-            print("=====++=++=============== NO MOV")
             return
         self.h_scroll_last_position = value
         self.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
 
 
-def main(loglevel, nvim_exec_path, path_to_open):
+def main(nvim_exec_path, path_to_open):
     """Main entry point."""
-    logging.getLogger("nysor").setLevel(loglevel)
-
     app = qasync.QApplication(sys.argv)
 
     event_loop = qasync.QEventLoop(app)
