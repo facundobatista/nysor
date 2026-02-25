@@ -33,7 +33,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libegl1-mesa libxkbcommon-x11-0
+          sudo apt-get install -y xvfb
 
       - name: Install dependencies
         run: |
@@ -42,6 +42,5 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
-          DISPLAY: ":99"
         run: |
-          pytest
+          xvfb-run -a pytest
