@@ -107,7 +107,7 @@ class BaseDisplay(QWidget):
         return self.widget_size
 
     def resizeEvent(self, event: QResizeEvent):
-        """Hook up in the event to trigger internal resizing."""
+        """Hook-up in the event to trigger internal resizing."""
         super().resizeEvent(event)
         self.window_resize()
 
@@ -154,7 +154,7 @@ class BaseDisplay(QWidget):
     #
 
     def mousePressEvent(self, event: QMouseEvent):
-        """A button mouse was pressed."""
+        """Handle a button mouse that was pressed."""
         button = event.button()
 
         if button is MouseButton.RightButton:
@@ -178,7 +178,7 @@ class BaseDisplay(QWidget):
         )
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        """A button mouse was released."""
+        """Handle a button mouse that was released."""
         button = event.button()
         if button is MouseButton.RightButton:
             self.main_window.present_context_window()
@@ -205,7 +205,7 @@ class BaseDisplay(QWidget):
         self.main_window.nvi.future_request("nvim_command", 'normal! "*ygv')
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        """Mouse is moving; we only care about this for left button dragging."""
+        """Handle when the mouse is moving; we only care about this for left button dragging."""
         button = event.buttons()
         if button in (MouseButton.NoButton, MouseButton.RightButton, MouseButton.MiddleButton):
             # ignore the event if not dragging with left button
@@ -224,7 +224,7 @@ class BaseDisplay(QWidget):
         )
 
     def wheelEvent(self, event: QWheelEvent):
-        """The wheel is used (or a wheel like interface).
+        """Handle when the wheel is used (or a wheel like interface).
 
         The event information is an angle. As Neovim only supports to be informed in one
         direction, in case of having both displacements in X and Y, we inform twice.

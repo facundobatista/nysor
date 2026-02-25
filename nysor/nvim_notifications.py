@@ -23,7 +23,7 @@ class DynamicCache:
     def get(self, labels, key):
         """Get the key from the cache indicated by labels.
 
-        This is the critical path. The rest of the methods need to accomodate for this
+        This is the critical path. The rest of the methods need to accommodate for this
         to be as fast as possible.
         """
         # the real cache is under the tuple of labels
@@ -47,11 +47,12 @@ class DynamicCache:
 
 
 class NvimNotifications:
-    """Dance at the rythm of Neovim.
+    """Dance at the rhythm of Neovim.
 
     Hold the relevant structures and handle all notifications. Some are sent to the TextDisplay
     widgets, other to the main waindow.
     """
+
     def __init__(self, main_window):
         self.main_window = main_window
         self.text_display = None  # will be set before first usage
@@ -209,5 +210,5 @@ class NvimNotifications:
         grid, objinfo, topline, botline, curline, curcol, line_count, scroll_delta = args
         # FIXME.90: ignore grid and objinfo so far, need to revisit this when multiwindow
 
-        # Note: can't find use to scroll_delta (maybe for smooth scroolbar?)
+        # Note: can't find use to scroll_delta (maybe for smooth scrollbar?)
         call_async(self.main_window.adjust_viewport, topline, botline, line_count, curcol)

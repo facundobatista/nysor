@@ -4,6 +4,7 @@
 
 """Main program."""
 
+import argparse
 import asyncio
 import logging
 import sys
@@ -20,7 +21,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt
 
-from nysor.logtools import log_notdone
+from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface
 from nysor.nvim_notifications import NvimNotifications
 from nysor.text_display import TextDisplay
@@ -29,6 +30,8 @@ logger = logging.getLogger(__name__)
 
 
 class MainApp(QMainWindow):
+    """The main application window."""
+
     def __init__(self, loop, path_to_open, nvim_exec_path):
         super().__init__()
         logger.info("Starting Nysor")
@@ -96,10 +99,12 @@ class MainApp(QMainWindow):
             await self.nvi.call("nvim_cmd", cmd, opts)
 
     def test_action(self):
+        """Test an action triggered by the GUI; this is a test/dev helper."""
         print("==== PyQt6 button pressed")
         log_notdone("test msg", foo=3, bar="xxtra")
 
     async def async_task(self):
+        """Run an async task; this is a test/dev helper."""
         result = await self.nvi.call("nvim_list_uis")
         print("=========== Async task! result:", repr(result))
 
@@ -237,19 +242,47 @@ class MainApp(QMainWindow):
         self.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
 
 
-def main(nvim_exec_path, path_to_open):
-    """Main entry point."""
+def start():
+    """Start the application."""
+    # mutually exclusive verbosity levels
+    parser = argparse.ArgumentParser()
+    loggroup = parser.add_mutually_exclusive_group()
+    for option, (_, helpmsg) in LOG_LEVELS.items():
+        if option:
+            loggroup.add_argument(
+                f"-{option[0]}",
+                f"--{option}",
+                action="store_const",
+                const=option,
+                dest="loglevel",
+                help=helpmsg
+            )
+
+    # the rest of argument parsing
+    parser.add_argument("--nvim", action="store", help="Path to the Neovim executable.")
+    parser.add_argument(
+        "path", action="store", nargs="?", default=None,
+        help="Path to the file to edit or directory to open (optional)"
+    )
+
+    # parse arguments
+    args = parser.parse_args()
+
+    # setup logging and create the app itself
+    logsetup(args.loglevel)
     app = qasync.QApplication(sys.argv)
 
+    # connect with async's event loop
     event_loop = qasync.QEventLoop(app)
     event_loop.set_debug(True)
     asyncio.set_event_loop(event_loop)
-
     app_close_event = asyncio.Event()
     app.aboutToQuit.connect(app_close_event.set)
 
-    main_window = MainApp(event_loop, path_to_open, nvim_exec_path)
+    # start and show GUI
+    main_window = MainApp(event_loop, args.path, args.nvim)
     main_window.show()
 
+    # go!
     with event_loop:
         event_loop.run_until_complete(app_close_event.wait())

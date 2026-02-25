@@ -34,7 +34,7 @@ def trace(msg, *params):
 
 
 def ext_hook(code, data):
-    """Hook to process other external types."""
+    """Process other external types in msg-unpacking."""
     # code is the type of object
     obj_type = _EXT_TYPE_CODES[code]
 
