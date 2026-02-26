@@ -29,7 +29,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install dependencies
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-opencv
+
+      - name: Install project dependencies
         run: |
           pip install ".[dev]"
 
