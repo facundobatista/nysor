@@ -23,17 +23,15 @@ class DynamicCache:
     def get(self, labels, key):
         """Get the key from the cache indicated by labels.
 
-        This is the critical path. The rest of the methods need to accomodate for this
+        This is the critical path. The rest of the methods need to accommodate for this
         to be as fast as possible.
         """
-        print("============ Dyn get", (labels, key))
         # the real cache is under the tuple of labels
         cache = self._data.setdefault(labels, {})
         return cache.get(key)
 
     def set(self, labels, key, value):
         """Store the value under given key in the cache indicated by labels."""
-        print("============ Dyn store", (labels, key, value))
         # store
         cache = self._data.setdefault(labels, {})
         cache[key] = value
@@ -41,21 +39,20 @@ class DynamicCache:
         # also annotate the labels for future cleanup
         for label in labels:
             self._labels[label].add(labels)
-        print("============ Dyn labels", self._labels)
 
     def clean(self, label):
         """Clean all caches for all set of labels where this label is present."""
-        print("============ Dyn clean", repr(label))
         for section in self._labels[label]:
             self._data[section].clear()
 
 
 class NvimNotifications:
-    """Dance at the rythm of Neovim.
+    """Dance at the rhythm of Neovim.
 
     Hold the relevant structures and handle all notifications. Some are sent to the TextDisplay
     widgets, other to the main waindow.
     """
+
     def __init__(self, main_window):
         self.main_window = main_window
         self.text_display = None  # will be set before first usage
@@ -74,13 +71,13 @@ class NvimNotifications:
             h_meth = getattr(self, h_name, None)
             if h_meth is None:
                 logger.warning(
-                    "[NvimManager] Submethod %r not implemented, params: %s", submethod, args)
+                    "[NvimManager] Submethod {!r} not implemented, params: {}", submethod, args)
             else:
                 try:
-                    logger.debug("[NvimManager] Notification: %s - %s", submethod, args)
+                    logger.debug("[NvimManager] Notification: {} - {}", submethod, args)
                     h_meth(*args)
                 except Exception:
-                    logger.exception("Crash when calling %r with %r", h_name, args)
+                    logger.exception("Crash when calling {!r} with {!r}", h_name, args)
 
     # -- specific notification handlers
 
@@ -160,7 +157,6 @@ class NvimNotifications:
     def _n__mode_change(self, args):
         """Information about cursor mode."""
         mode, mode_idx = args
-        print("================== mode raw", repr(mode), repr(mode_idx))
         # we ignore the mode idx as we stored in the modes in a dict using the name
         mode_info = self.structs["mode-info"][mode]
         self.text_display.change_mode(mode_info)
@@ -188,7 +184,7 @@ class NvimNotifications:
 
     def _n__option_set(self, *options):
         options = dict(options)
-        logger.debug("[NvimManager] options set: %s", options)
+        logger.debug("[NvimManager] options set: {}", options)
         self.options.update(options)
 
         # react to some of those options
@@ -202,7 +198,7 @@ class NvimNotifications:
         """Set the icon, if any."""
         (icon,) = param
         if icon:
-            logger.warning("[NvimManager] need to implement set icon with %r", icon)
+            logger.warning("[NvimManager] need to implement set icon with {!r}", icon)
 
     def _n__set_title(self, param):
         """Set title."""
@@ -214,5 +210,5 @@ class NvimNotifications:
         grid, objinfo, topline, botline, curline, curcol, line_count, scroll_delta = args
         # FIXME.90: ignore grid and objinfo so far, need to revisit this when multiwindow
 
-        # Note: can't find use to scroll_delta (maybe for smooth scroolbar?)
+        # Note: can't find use to scroll_delta (maybe for smooth scrollbar?)
         call_async(self.main_window.adjust_viewport, topline, botline, line_count, curcol)

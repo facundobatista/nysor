@@ -1,4 +1,4 @@
-# Copyright 2025 Facundo Batista
+# Copyright 2025-2026 Facundo Batista
 # Licensed under the Apache v2 License
 # For further info, check https://github.com/facundobatista/nysor
 
@@ -14,12 +14,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CharUnderline:
+    """Represent the underlyne style of a single char."""
     color: QColor
     style: str  # "underline", "undercurl", "underdouble", "underdotted", "underdashed"
 
 
 @dataclass
 class CharFormat:
+    """Represent the overall format of a single char."""
     foreground: QColor
     background: QColor
     strikethrough: bool = False
@@ -30,6 +32,8 @@ class CharFormat:
 
 @dataclass
 class LogicalChar:
+    """Represent a logical character with its format and wide indication."""
+
     char: str
     format: CharFormat
     is_wide: bool = False
@@ -51,6 +55,7 @@ class LogicalLines:
 
     @classmethod
     def empty(cls):
+        """Return an empty line."""
         return cls(0, 0, None)
 
     def get(self, row):

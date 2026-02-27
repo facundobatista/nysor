@@ -34,7 +34,7 @@ def trace(msg, *params):
 
 
 def ext_hook(code, data):
-    """Hook to process other external types."""
+    """Process other external types in msg-unpacking."""
     # code is the type of object
     obj_type = _EXT_TYPE_CODES[code]
 
@@ -59,7 +59,7 @@ class NvimInterface:
         self._neovim_being_quited = False
 
         _sock_path = self._get_unique_sock_path()
-        logger.info("Starting Neovim process, communicating through %r", _sock_path)
+        logger.info("Starting Neovim process, communicating through {!r}", _sock_path)
         if nvim_exec_path is None:
             nvim_exec_path = "nvim"
         self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", _sock_path])
@@ -72,7 +72,7 @@ class NvimInterface:
             # way to ensure that nvim is really up
             time.sleep(.05)
         tdelta = time.time() - tini
-        logger.debug("Neovim process started! it took %d ms", int(tdelta / 1000))
+        logger.debug("Neovim process started! it took {:d} ms", int(tdelta / 1000))
 
         self._client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._client.setblocking(False)
@@ -92,7 +92,7 @@ class NvimInterface:
             uniqueid = uuid.uuid4().hex
             path = f"/tmp/nysor-subnvim-{uniqueid}.s"
             if os.path.exists(path):
-                logger.warning("Found an unique path already in disk: %r", path)
+                logger.warning("Found an unique path already in disk: {!r}", path)
             else:
                 return path
 
@@ -158,7 +158,7 @@ class NvimInterface:
         if method == "nvim_ui_attach":
             self._ui_attached = True
         if method.startswith("nvim_ui") and not self._ui_attached:
-            logger.debug("Ignoring request as UI still not attached; method: %r", method)
+            logger.debug("Ignoring request as UI still not attached; method: {!r}", method)
 
             # in case a callback is passed, just call it to close up waiters/coroutines; it's an
             # error condition, but the called method is doomed anyway
@@ -171,7 +171,7 @@ class NvimInterface:
 
         # type (0 == request), msgid, method, params
         payload = msgpack.packb([0, self._cb_counter, method.encode("ascii"), params])
-        trace("Sending request id=%d method=%r params=%s", self._cb_counter, method, params)
+        trace("Sending request id={:d} method={!r} params={}", self._cb_counter, method, params)
         try:
             await self._loop.sock_sendall(self._client, payload)
         except BrokenPipeError:
@@ -199,17 +199,17 @@ class NvimInterface:
         verification.
         """
         return_code = self._proc.poll()
-        logger.debug("Reading response; rc %s", return_code)
+        logger.debug("Reading response; rc {}", return_code)
 
         for msgtype, *rest in self._read_messages():
             if msgtype == 1:
                 # response
                 msgid, error, result = rest
-                trace("Receiving response msgid=%d error=%r result=%r", msgid, error, result)
+                trace("Receiving response msgid={:d} error={!r} result={!r}", msgid, error, result)
                 callback, errback = self._callbacks.pop(msgid)
 
                 if error is not None:
-                    logger.error("Error from Neovim: %r", error)
+                    logger.error("Error from Neovim: {!r}", error)
                     errback(error[1])
                 if callback is not None:
                     callback(result)
@@ -217,11 +217,11 @@ class NvimInterface:
             elif msgtype == 2:
                 # notification
                 method, params = rest
-                trace("Receiving notification method=%r params=%r", method, params)
+                trace("Receiving notification method={!r} params={!r}", method, params)
                 self._notif_handler(method, params)
 
             else:
-                logger.error("Bad message type from nvim: %r (rest=%r)", msgtype, rest)
+                logger.error("Bad message type from nvim: {!r} (rest={!r})", msgtype, rest)
 
         if return_code is not None:
             # process finished; do this closing at the end of the reading in any case there is a

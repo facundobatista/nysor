@@ -27,6 +27,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
 
 from nysor.logical_lines import LogicalLines, CharFormat, CharUnderline
+from nysor.logtools import log_notdone
 
 logger = logging.getLogger(__name__)
 
@@ -106,13 +107,12 @@ class BaseDisplay(QWidget):
         return self.widget_size
 
     def resizeEvent(self, event: QResizeEvent):
-        """Hook up in the event to trigger internal resizing."""
+        """Hook-up in the event to trigger internal resizing."""
         super().resizeEvent(event)
         self.window_resize()
 
     def keyPressEvent(self, event: QKeyEvent):
         """Get all keyboard events."""
-        print("\n========== Key", repr(event.text()), hex(event.key()), repr(event.modifiers()))
         key_text = event.text()
         key = event.key()
         modifiers = event.modifiers()
@@ -120,7 +120,6 @@ class BaseDisplay(QWidget):
 
     def paintEvent(self, event: QPaintEvent):
         """Paint the widget."""
-        print("======= PAINT!")
         painter = QPainter(self)
         painter.setRenderHints(
             QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
@@ -130,7 +129,7 @@ class BaseDisplay(QWidget):
 
     # ----- set of mouse related callbacks
     #
-    # Nnothing is really done by the TextDisplay, but by Neovim directly or the main window:
+    # Nothing is really done by the TextDisplay, but by Neovim directly or the main window:
     #
     # left button:
     #    - on press: sent to Neovim, for cursor positioning
@@ -155,7 +154,7 @@ class BaseDisplay(QWidget):
     #
 
     def mousePressEvent(self, event: QMouseEvent):
-        """A button mouse was pressed."""
+        """Handle a button mouse that was pressed."""
         button = event.button()
 
         if button is MouseButton.RightButton:
@@ -179,7 +178,7 @@ class BaseDisplay(QWidget):
         )
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        """A button mouse was released."""
+        """Handle a button mouse that was released."""
         button = event.button()
         if button is MouseButton.RightButton:
             self.main_window.present_context_window()
@@ -206,7 +205,7 @@ class BaseDisplay(QWidget):
         self.main_window.nvi.future_request("nvim_command", 'normal! "*ygv')
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        """Mouse is moving; we only care about this for left button dragging."""
+        """Handle when the mouse is moving; we only care about this for left button dragging."""
         button = event.buttons()
         if button in (MouseButton.NoButton, MouseButton.RightButton, MouseButton.MiddleButton):
             # ignore the event if not dragging with left button
@@ -225,7 +224,7 @@ class BaseDisplay(QWidget):
         )
 
     def wheelEvent(self, event: QWheelEvent):
-        """The wheel is used (or a wheel like interface).
+        """Handle when the wheel is used (or a wheel like interface).
 
         The event information is an angle. As Neovim only supports to be informed in one
         direction, in case of having both displacements in X and Y, we inform twice.
@@ -313,7 +312,6 @@ class TextDisplay(BaseDisplay):
         # simple case when it's just unicode text
         if key_text:
             key_text = key_text.replace("<", "<LT>")
-            print("=====++=++======= key simple:", repr(key_text))
             self.main_window.nvi.future_request("nvim_input", key_text)
             return
 
@@ -334,27 +332,23 @@ class TextDisplay(BaseDisplay):
 
         parts.append(keyname)
         composed = f"<{"-".join(parts)}>"
-        print("=====++=++======= key composed:", repr(composed))
         self.main_window.nvi.future_request("nvim_input", composed)
 
     def _build_empty_logical_lines(self):
         """Build an empty logical lines."""
         default_fmt = self._build_text_format(None)
         cols, rows = self.display_size
-        print("============= BUILD!")
         return LogicalLines(rows, cols, default_fmt)
 
     def clear(self):
         """Clear the display."""
         self.need_grid_clearing = True
-        print("====++++++======= clear scheduled")
         self.lines = self._build_empty_logical_lines()
 
     def set_font(self, name, size):
         """Set the font."""
         # when requesting the font itself, round up the size, as it may not work
         # properly with non-ints
-        print("========= set font!", name, size)
         self.font = QFont(name, math.ceil(size))
         self.font.setFixedPitch(True)
 
@@ -376,7 +370,6 @@ class TextDisplay(BaseDisplay):
 
         If size is given (W x H) it is used; else use current size (if not set, default to 80x20.
         """
-        print("=++++++== resize", size)
         if size is None:
             size = self.display_size
         else:
@@ -387,12 +380,10 @@ class TextDisplay(BaseDisplay):
         if self.font_size is None:
             return
 
-        print("==++++++== resize font size?", self.font, self.font_size)
         # calculate widget desired size, update internal record, and call Qt magic to resize/redraw
         view_width = math.ceil(self.font_size.width * cols)
         view_height = math.ceil(self.font_size.height * rows)
         self.widget_size = QSize(view_width, view_height)
-        print("==++++++== resize update a", self.widget_size)
         if force:
             self.updateGeometry()
             self.main_window.adjustSize()
@@ -404,8 +395,8 @@ class TextDisplay(BaseDisplay):
             self.lines.scroll_vertical(top, bottom, delta)
 
         left, right, delta = horizontal
-        # FIXME.06 log in error with a prefix
-        assert delta == 0  # need to implement if the situation really arises
+        if delta != 0:
+            log_notdone("Horizontal scroll has delta", delta=delta)
 
     def flush(self):
         """Update the window."""
@@ -413,7 +404,6 @@ class TextDisplay(BaseDisplay):
 
     def set_cursor(self, row, col):
         """Set the cursor position in the display."""
-        print("==---======= new cursor pos", row, col)
         self.cursor_pos = (row, col)
 
     def _paint_cursor_block(self, attr_id, painter, start_x, start_y, width):
@@ -619,8 +609,8 @@ class TextDisplay(BaseDisplay):
 
         if "attr_id_lm" in mode_info:
             attr_id_lm = mode_info.pop("attr_id_lm")
-            # FIXME.06 log in error with a prefix
-            assert attr_id_lm == 0  # need to implement if the situation really arises
+            if attr_id_lm != 0:
+                log_notdone("Cursor attribute id for when :lmap is on", attr_id_lm=attr_id_lm)
 
         if "blinkon" in mode_info:
             # consider that if one is present, the three will be
@@ -628,34 +618,22 @@ class TextDisplay(BaseDisplay):
             blinkoff = mode_info.pop("blinkoff")
             blinkwait = mode_info.pop("blinkwait")
             if blinkon or blinkoff or blinkwait:
-                # FIXME.06 log in error with a prefix
-                logger.warning(
-                    "Cursor blinking not supported yet - on=%d off=%d wait=%d",
-                    blinkon,
-                    blinkoff,
-                    blinkwait,
-                )
+                log_notdone("Cursor blinking", on=blinkon, off=blinkoff, wait=blinkwait)
 
         # we need a cursor, be gentle with input and default to a full block
         cursor_shape = mode_info.pop("cursor_shape", "block")
         cursor_perc = mode_info.pop("cell_percentage", 20)
         cursor_attr_id = mode_info.pop("attr_id", 0)
-        print("========= CURSOR color", cursor_attr_id)
         if cursor_shape == "block":
             cursor_painter = partial(self._paint_cursor_block, cursor_attr_id)
         elif cursor_shape == "vertical":
             cursor_painter = partial(self._paint_cursor_vertical, cursor_attr_id, cursor_perc)
         else:
-            # FIXME.06 log in error with a prefix
-            # need to implement if the situation really arises
-            raise NotImplementedError(
-                "Cursor shape not currently supported: {cursor_shape!r} ({cursor_perc!r})"
-            )
+            log_notdone("Cursor with this shape", shape=cursor_shape, percentage=cursor_perc)
         result_struct["cursor_painter"] = cursor_painter
 
         if mode_info:
-            # FIXME.06 log in error with a prefix
-            logger.warning("Some mode change info remained unprocessed: %s", mode_info)
+            log_notdone("Some mode change info remained unprocessed", mode_info=mode_info)
 
         return result_struct
 
@@ -681,10 +659,8 @@ class TextDisplay(BaseDisplay):
         dyncache_labels = ("default_colors", "hl-attrs")
         fmt = self.main_window.nvim_notifs.dyncache.get(dyncache_labels, hl_id)
         if fmt is not None:
-            print("========= text format CACHED", hl_id)
             return fmt
 
-        print("========= build text format", hl_id)
         # the base is always the default color
         default_colors = self.main_window.nvim_notifs.structs["default_colors"]
         fmt = CharFormat(
@@ -728,7 +704,7 @@ class TextDisplay(BaseDisplay):
                 fmt.underline = CharUnderline(color=special_color, style=underline_style)
 
             if hl:
-                logger.warning("Some text format remained unprocessed: %s", hl)
+                logger.warning("Some text format remained unprocessed: {}", hl)
 
         # set the format in dynamic cache
         self.main_window.nvim_notifs.dyncache.set(dyncache_labels, hl_id, fmt)
@@ -741,7 +717,6 @@ class TextDisplay(BaseDisplay):
         repetitions.
         """
         textinfo = []
-        print("====++=++===== WRITE", row, col, sequence)
 
         fmt = self._build_text_format(None)
         for item in sequence:
