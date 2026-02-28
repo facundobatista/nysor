@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QIcon
 
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound
@@ -37,8 +38,7 @@ Find here how to install Neovim:<br/>
 &nbsp;&nbsp;&nbsp;&nbsp;<a href="https://neovim.io/doc/install/">https://neovim.io/doc/install/</a><br/>
 <br/>
 The <span style="font-family:monospace; color:green">nvim</span> executable should be in the system's PATH; alternatively you can indicate the path using the <span style="font-family:monospace; color:green">--nvim</span> parameter.
-"""
-
+"""  # NOQA
 
 
 class MainApp(QMainWindow):
@@ -46,6 +46,8 @@ class MainApp(QMainWindow):
 
     def __init__(self, loop, path_to_open, nvim_exec_path):
         super().__init__()
+        self.setWindowIcon(QIcon("media/icon-1024.png"))
+
         logger.info("Starting Nysor")
         self._closing = 0
         self.nvim_notifs = NvimNotifications(self)
