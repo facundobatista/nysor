@@ -26,6 +26,14 @@ logger = logging.getLogger(__name__)
 
 class NeovimError(Exception):
     """Exception that indicates an error from Neovim."""
+    def __init__(self, message=None):
+        if message is None:
+            message = self.__doc__
+        super().__init__(message)
+
+
+class NeovimExecutableNotFound(NeovimError):
+    """The executable to run neovim was not found."""
 
 
 def trace(msg, *params):
@@ -62,7 +70,12 @@ class NvimInterface:
         logger.info("Starting Neovim process, communicating through {!r}", _sock_path)
         if nvim_exec_path is None:
             nvim_exec_path = "nvim"
-        self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", _sock_path])
+        try:
+            self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", _sock_path])
+        except FileNotFoundError as exc:
+            logger.error("File not found when trying to run nvim: {!r}", exc)
+            raise NeovimExecutableNotFound()
+
         tini = time.time()
         while True:
             if os.path.exists(_sock_path):

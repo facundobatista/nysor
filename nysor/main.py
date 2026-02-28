@@ -22,11 +22,23 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
-from nysor.nvim_interface import NvimInterface
+from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound
 from nysor.nvim_notifications import NvimNotifications
 from nysor.text_display import TextDisplay
 
 logger = logging.getLogger(__name__)
+
+
+_nvim_exec_not_found_msg = """\
+<b>{exc}</b><br/>
+<br/>
+Find here how to install Neovim:<br/>
+<br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<a href="https://neovim.io/doc/install/">https://neovim.io/doc/install/</a><br/>
+<br/>
+The <span style="font-family:monospace; color:green">nvim</span> executable should be in the system's PATH; alternatively you can indicate the path using the <span style="font-family:monospace; color:green">--nvim</span> parameter.
+"""
+
 
 
 class MainApp(QMainWindow):
@@ -39,9 +51,22 @@ class MainApp(QMainWindow):
         self.nvim_notifs = NvimNotifications(self)
 
         # setup the Neovim interface
-        self.nvi = NvimInterface(
-            nvim_exec_path, loop, self.nvim_notifs.handler, self._quit_callback
-        )
+        try:
+            self.nvi = NvimInterface(
+                nvim_exec_path, loop, self.nvim_notifs.handler, self._quit_callback
+            )
+        except NeovimExecutableNotFound as exc:
+            logger.error("Failed to start neovim interface: {!r}", exc)
+            msg = _nvim_exec_not_found_msg.format(exc=exc)
+            dlg = QMessageBox(self)
+            dlg.setTextFormat(Qt.TextFormat.RichText)
+            dlg.setIcon(QMessageBox.Icon.Critical)
+            dlg.setWindowTitle("Startup Error")
+            dlg.setText(msg)
+            dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            dlg.exec()
+            exit(1)
+
         loop.create_task(self.setup_nvim(path_to_open))
 
         # scrollbars

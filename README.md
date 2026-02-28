@@ -59,9 +59,6 @@ These are the items lousely grouped to get there:
 
 **For 0.5:**
 
-- present an error window if a `nvim` executable is not Found
-    - include instructions to install it
-    - not yet configurable, but run it with `--nvim`
 - Include the icon, so it's shown in the window decoration
 
 
@@ -130,10 +127,13 @@ The path after that is less descriptive. The following are the big items I want 
 **For version 5:**
 - automatically run linters
     - if the standard ones are in the virtual environment, use them, add decorations for their results
-- minimum github support
+- minimum git support
     - decoration of lines added/removed/changed
 - support minimal configuration
     - overrid automatic detections, like virtualenv directories, linters to run, etc
     - placement of decoration for line length
     - scrollbars behaviour (never, always, dynamic)
     - nvim exec path
+
+**For version 6:**
+- incorporate the possibility of AIs to read/write code
