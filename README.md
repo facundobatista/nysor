@@ -64,8 +64,12 @@ These are the items lousely grouped to get there:
 - complete "GUI window"
     - add a very clean menu
     - File: Exit, About
+    - Development
+        - Open project page
+        - BUTTONS!
     - the About should present name, icon, and versions for Nysor *and* the nvim it's using
 - remove the two debug buttons
+- screenshot in README
 
 
 **For 0.6:**

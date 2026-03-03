@@ -14,6 +14,9 @@ import uuid
 
 import msgpack
 
+# do not poll more frequently than these seconds
+POLL_FREEZE_PERIOD = 0.005
+
 # some Neovim translation constants
 _EXT_TYPE_CODES = {
     1: "window",
@@ -96,6 +99,7 @@ class NvimInterface:
         self._callbacks = {}
         self._cb_counter = 0
         self._ui_attached = False
+        self.last_poll_timestamp = 0
 
         self._msg_unpacker = msgpack.Unpacker(raw=False, ext_hook=ext_hook)
 
@@ -211,6 +215,12 @@ class NvimInterface:
         Here is where we check if the process is still running, as it allows a frequent
         verification.
         """
+        now = time.time()
+        if (now - self.last_poll_timestamp) < POLL_FREEZE_PERIOD:
+            return
+        self.last_poll_timestamp = now
+
+        # really read
         return_code = self._proc.poll()
         logger.debug("Reading response; rc {}", return_code)
 
