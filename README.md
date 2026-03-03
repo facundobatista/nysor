@@ -60,16 +60,18 @@ These are the items lousely grouped to get there:
 **For 0.5:**
 
 - Include the icon, so it's shown in the window decoration
-
-
-**For 0.6:**
-
 - complete "GUI window"
     - add a very clean menu
     - File: Exit, About
     - the About should present name, icon, and versions for Nysor *and* the nvim it's using
 - remove the two debug buttons
 
+
+**For 0.6:**
+- if "`-`" is the parameter, it should handle `stdin`
+    - let's see if Neovim supports through API telling it to open stdin
+    - otherwise just make it work: open a temporary file with content retrieved from `stdin` and tell Neovim to use that
+    - FIXME.92
 
 **For 1.0:**
 
@@ -110,11 +112,6 @@ The path after that is less descriptive. The following are the big items I want 
     - if it's a directory, open it with a treeview based in that directory
         - if this is not the first time the directory is "opened", it should remember which files were previosly open
     - if nothing is indicated, open it empty, with no treeview
-    - if "`-`" is the parameter, it should handle `stdin`
-        - let's see if Neovim supports through API telling it to open stdin
-        - otherwise just make it work: open a temporary file with content retrieved from `stdin` and tell Neovim to use that
-        - no treeview
-        - FIXME.92
 
 **For version 4:**
 - different Nysor runs should be different processes, but aware of them

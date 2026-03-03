@@ -32,9 +32,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "codespell",
-    "flake8",
-    "pydocstyle",
     "pytest",
+    "ruff",
 ]
 
 [project.scripts]
@@ -54,3 +53,15 @@ requires = ["setuptools>=64"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nysor*"]
+
+[tool.ruff]
+include = ["nysor/**/*.py", "tests/**/*.py"]
+line-length = 99
+preview = true
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "D", "CPY"]
+ignore = ["D107", "D204", "D105", "D213", "D203"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D"] 
