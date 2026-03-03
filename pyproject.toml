@@ -32,9 +32,8 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "codespell",
-    "flake8",
-    "pydocstyle",
     "pytest",
+    "ruff",
 ]
 
 [project.scripts]
