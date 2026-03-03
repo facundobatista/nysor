@@ -4,6 +4,8 @@ Yet another graphical interface for Neovim.
 
 Written in Python, with Qt.
 
+![logo](https://github.com/facundobatista/nysor/blob/main/media/logo-hztal.png?raw=True)
+
 Pronounced similar to "organizer", but without the "orga" and changing the "e" for an "o".
 
 
@@ -59,7 +61,6 @@ These are the items lousely grouped to get there:
 
 **For 0.5:**
 
-- Include the icon, so it's shown in the window decoration
 - complete "GUI window"
     - add a very clean menu
     - File: Exit, About
