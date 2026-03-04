@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QAction
 
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound
@@ -41,12 +41,98 @@ The <span style="font-family:monospace; color:green">nvim</span> executable shou
 """  # NOQA
 
 
+class MainMenu:
+    """Build and manage the main menu bar for the application."""
+
+    def __init__(self, app):
+        self._app = app
+        self._menu_bar = app.menuBar()
+
+        menu_structure = {
+            "&File": [
+                ("&open", self._on__file__open),
+                ("&Save", self._on__file__save),
+                (None, None),
+                ("E&xit", self._on__file__exit),
+            ],
+            "&Debug": [
+                ("Button &1", self._on__debug__button1),
+                ("Button &2", self._on__debug__button2),
+            ],
+            "&Help": [
+                ("Open &project page", self._on__help__open_project_page),
+                ("Create a new &issue", self._on__help__create_issue),
+                (None, None),
+                ("&About Nysor", self._on__help__about),
+            ],
+        }
+
+        for title, options in menu_structure.items():
+            menu = self._menu_bar.addMenu(title)
+            for name, func in options:
+                if name is None:
+                    menu.addSeparator()
+                    continue
+
+                action = QAction(name, self._menu_bar)
+                action.triggered.connect(func)
+                menu.addAction(action)
+
+    def _log_action(func):
+        """Log the action indicate by the user."""
+        def _f(self):
+            logger.debug("User triggered menu action {!r}", func.__name__)
+            return func(self)
+        return _f
+
+    @_log_action
+    def _on__file__open(self):
+        """Open a file."""
+        print("File > Open")
+
+    @_log_action
+    def _on__file__save(self):
+        """Save the current file."""
+        print("File > Save")
+
+    @_log_action
+    def _on__file__exit(self):
+        """Exit the application."""
+        self._app.close_gui()
+
+    @_log_action
+    def _on__debug__button1(self):
+        """Debug action: Button 1."""
+        print("Debug > Button 1")
+
+    @_log_action
+    def _on__debug__button2(self):
+        """Debug action: Button 2."""
+        print("Debug > Button 2")
+
+    @_log_action
+    def _on__help__open_project_page(self):
+        """Open the project page in the browser."""
+        print("Help > Open project page")
+
+    @_log_action
+    def _on__help__create_issue(self):
+        """Open the issue tracker in the browser."""
+        print("Help > Create a new issue")
+
+    @_log_action
+    def _on__help__about(self):
+        """Show the About dialog."""
+        print("Help > About Nysor")
+
+
 class MainApp(QMainWindow):
     """The main application window."""
 
     def __init__(self, loop, path_to_open, nvim_exec_path):
         super().__init__()
         self.setWindowIcon(QIcon("media/icon-1024.png"))
+        self._menu = MainMenu(self)
 
         logger.info("Starting Nysor")
         self._closing = 0
@@ -161,29 +247,41 @@ class MainApp(QMainWindow):
             self._closing = 2
             self.close()
 
-    def closeEvent(self, event):
+    def close_gui(self, event=None):
         """Close Neovim and then let the rest to finish.
 
-        The event is ignored so the "real closing" is interrupted, which is triggered later
-        when Neovim is already down.
+        If event is not None this is the closeEvent (from alt-F4, click in the X, etc.), so
+        ignoring/accepting it is the real indication to close the GUI.
+
+        If event is None (called from the menu) we need to call 'close' explicitly.
         """
-        logger.debug("Close requested; current state {:d}", self._closing)
+        logger.debug("Close requested (event={}); current state {:d}", event, self._closing)
         if self._closing == 0:
-            # start to close; ignore the event so GUI is still alive, but start internal procedures
+            # initiate the process to close; ignore the event so GUI is still alive, but
+            # start internal procedures
             self._closing = 1
-            event.ignore()
+            if event is not None:
+                event.ignore()
             asyncio.create_task(self._quit())
             return
 
         if self._closing == 1:
-            # the event was received again in the middle of internal closing, keep ignoring it;
-            event.ignore()
+            # the request was received again in the middle of internal closing, keep ignoring it
+            if event is not None:
+                event.ignore()
             return
 
-        # we're really done here, let the event propagate so
+        # we're really done here, let the event propagate if we have it, or close manually
         assert self._closing == 2
         logger.debug("Bye")
-        event.accept()
+        if event is None:
+            self.close()
+        else:
+            event.accept()
+
+    def closeEvent(self, event):
+        """Handle the event from the GUI to close itself."""
+        self.close_gui(event)
 
     def present_context_window(self):
         """Present a context window with some options for the user."""
