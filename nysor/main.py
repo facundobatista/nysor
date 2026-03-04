@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QScrollBar,
     QVBoxLayout,
     QWidget,
@@ -56,8 +55,8 @@ class MainMenu:
                 ("E&xit", self._on__file__exit),
             ],
             "&Debug": [
-                ("Button &1", self._on__debug__button1),
-                ("Button &2", self._on__debug__button2),
+                ("Run a blocking call", self._on__debug__blocking_call),
+                ("Run an async task", self._on__debug__async_task),
             ],
             "&Help": [
                 ("Open &project page", self._on__help__open_project_page),
@@ -101,14 +100,19 @@ class MainMenu:
         self._app.close_gui()
 
     @_log_action
-    def _on__debug__button1(self):
-        """Debug action: Button 1."""
-        print("Debug > Button 1")
+    def _on__debug__blocking_call(self):
+        """Test an action triggered by the GUI; this is a test/dev helper."""
+        logger.info("Code run in a standard function run from the GUI.")
 
     @_log_action
-    def _on__debug__button2(self):
-        """Debug action: Button 2."""
-        print("Debug > Button 2")
+    def _on__debug__async_task(self):
+        """Run an async task; this is a test/dev helper."""
+
+        async def async_task():
+            result = await self._app.nvi.call("nvim_list_uis")
+            logger.info("Code run in an async task, listing UIs from Neovim: {}", result)
+
+        asyncio.create_task(async_task())
 
     @_log_action
     def _on__help__open_project_page(self):
@@ -185,14 +189,6 @@ class MainApp(QMainWindow):
         # rest of vertical widgets
         self.main_layout.addWidget(self.h_scroll)
 
-        # FIXME.91: dejar esto para entender que funciona
-        self.button = QPushButton("Click here for a blocking call", self)
-        self.button.clicked.connect(self.test_action)
-        self.main_layout.addWidget(self.button)
-        self.button2 = QPushButton("Run async task", self)
-        self.button2.clicked.connect(lambda: asyncio.create_task(self.async_task()))
-        self.main_layout.addWidget(self.button2)
-
     async def setup_nvim(self, path_to_open):
         """Set up Neovim."""
         _, api_metadata = await self.nvi.call("nvim_get_api_info")
@@ -210,16 +206,6 @@ class MainApp(QMainWindow):
             cmd = {"cmd": "edit", "args": [path_to_open]}
             opts = {"output": False}  # don't capture output
             await self.nvi.call("nvim_cmd", cmd, opts)
-
-    def test_action(self):
-        """Test an action triggered by the GUI; this is a test/dev helper."""
-        print("==== PyQt6 button pressed")
-        log_notdone("test msg", foo=3, bar="xxtra")
-
-    async def async_task(self):
-        """Run an async task; this is a test/dev helper."""
-        result = await self.nvi.call("nvim_list_uis")
-        print("=========== Async task! result:", repr(result))
 
     async def _quit(self):
         """Close the GUI after Neovim is down."""

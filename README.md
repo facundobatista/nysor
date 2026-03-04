@@ -61,35 +61,15 @@ These are the items lousely grouped to get there:
 
 **For 0.5:**
 
-Tengo un QMainWindow, quiero agregarle un menu de opciones. Creame una clase MainMenu o parecido que me ofrezca el siguiente menu:
-- File
-    - Open
-    - Save
-    - Exit
-- Debug
-    - Button 1
-    - Button 2
-- Help
-    - Open project page
-    - Create a new issue
-    - About Nysor
-
-Que cada opción me llame a una función armada con el nombre de la opción (ej: `_on__file__open`) en esa clase MainMenu. Creame todas las funciones, con un docstring y un print() en c/u. Indicame cómo integra MainMenu a QMainWindow.
-
-
-Decime cómo le pregunto a neovim por RPC si el buffer actual está listo para ser cerrado o tiene cambios sin guardar. Y cómo le digo que guarde con el nombre actual o con un nombre nuevo.
-
-Haceme una función que me devuelva una versión
-    - si el proyecto se está ejecutando en su REPO, que devuelva el
 
 - complete "GUI window"
-    - add a very clean menu
-    - File: Exit, About
-    - Development
+    - File
+        - Open
+        - Save
+    - Help
         - Open project page
-        - BUTTONS!
-    - the About should present name, icon, and versions for Nysor *and* the nvim it's using
-- remove the two debug buttons
+        - Create a new issue
+        - About Nysor
 - screenshot in README
 
 
@@ -131,8 +111,6 @@ The path after that is less descriptive. The following are the big items I want 
     - switch back and forward clicking on tabs
     - when going back to a tab, it should check if underneath file changed
     - support closing properly, each tab or the whole program, asking for the buffers that are not properly saved
-- remove the "debug buttons"
-    - FIXME.91
 
 **For version 3:**
 - it should open more than a file if it's given in the command line
