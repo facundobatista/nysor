@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import logging
 import sys
+import webbrowser
 
 import qasync
 from PyQt6.QtWidgets import (
@@ -29,7 +30,7 @@ from nysor.text_display import TextDisplay
 logger = logging.getLogger(__name__)
 
 
-_nvim_exec_not_found_msg = """\
+_NVIM_EXEC_NOT_FOUND_MSG = """\
 <b>{exc}</b><br/>
 <br/>
 Find here how to install Neovim:<br/>
@@ -38,6 +39,18 @@ Find here how to install Neovim:<br/>
 <br/>
 The <span style="font-family:monospace; color:green">nvim</span> executable should be in the system's PATH; alternatively you can indicate the path using the <span style="font-family:monospace; color:green">--nvim</span> parameter.
 """  # NOQA
+
+_ABOUT_TEXT = """
+<br/>
+<span style="font-size:+1"><b>Nysor</b></span><br/>
+<br/>
+Yet another graphical interface for Neovim.<br/>
+<br/>
+Written in Python, with Qt.<br/>
+<br/>
+<br/>
+<small>Copyright 2025-2026 Facundo Batista</small><br/>
+"""
 
 
 class MainMenu:
@@ -117,17 +130,24 @@ class MainMenu:
     @_log_action
     def _on__help__open_project_page(self):
         """Open the project page in the browser."""
-        print("Help > Open project page")
+        webbrowser.open("https://github.com/facundobatista/nysor")
 
     @_log_action
     def _on__help__create_issue(self):
         """Open the issue tracker in the browser."""
-        print("Help > Create a new issue")
+        webbrowser.open("https://github.com/facundobatista/nysor/issues/new")
 
     @_log_action
     def _on__help__about(self):
         """Show the About dialog."""
-        print("Help > About Nysor")
+        msg = _ABOUT_TEXT
+        dlg = QMessageBox(self._app)
+        dlg.setTextFormat(Qt.TextFormat.RichText)
+        dlg.setIconPixmap(QIcon("media/icon-1024.png").pixmap(128, 128))
+        dlg.setWindowTitle("About Nysor")
+        dlg.setText(msg)
+        dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dlg.exec()
 
 
 class MainApp(QMainWindow):
@@ -149,7 +169,7 @@ class MainApp(QMainWindow):
             )
         except NeovimExecutableNotFound as exc:
             logger.error("Failed to start neovim interface: {!r}", exc)
-            msg = _nvim_exec_not_found_msg.format(exc=exc)
+            msg = _NVIM_EXEC_NOT_FOUND_MSG.format(exc=exc)
             dlg = QMessageBox(self)
             dlg.setTextFormat(Qt.TextFormat.RichText)
             dlg.setIcon(QMessageBox.Icon.Critical)
