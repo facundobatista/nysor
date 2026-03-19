@@ -63,25 +63,42 @@ class NvimNotifications:
         self.structs = {}
         self.dyncache = DynamicCache()
 
-    def handler(self, method: str, parameters: list[Any]):
-        """Handle a notification from Neovim."""
-        assert method == "redraw"
+    def _h__redraw(self, parameters: list[Any]):
+        """Handle the 'redraw' notification."""
         for submethod, *args in parameters:
-            h_name = "_n__" + submethod
-            h_meth = getattr(self, h_name, None)
-            if h_meth is None:
-                logger.warning(
-                    "[NvimManager] Submethod {!r} not implemented, params: {}", submethod, args)
+            n_name = "_n_redraw__" + submethod
+            n_meth = getattr(self, n_name, None)
+            if n_meth is None:
+                logger.error(
+                    "[NvimNotifications] Submethod {!r} not implemented in 'redraw', params: {}",
+                    submethod, args
+                )
             else:
                 try:
-                    logger.debug("[NvimManager] Notification: {} - {}", submethod, args)
-                    h_meth(*args)
+                    logger.debug("[NvimNotifications] Handle 'redraw': {} - {}", submethod, args)
+                    n_meth(*args)
                 except Exception:
-                    logger.exception("Crash when calling {!r} with {!r}", h_name, args)
+                    logger.exception("Crash when calling {!r} with {!r}", n_name, args)
+
+    def _h__modified_changed(self, parameters: list[Any]):
+        """Handle the 'modified_changed' notification."""
+        (is_modified,) = parameters
+        self.main_window.set_state(is_modified=is_modified)
+
+    def handler(self, method: str, parameters: list[Any]):
+        """Handle all notifications from Neovim."""
+        h_name = "_h__" + method
+        h_meth = getattr(self, h_name, None)
+        if h_meth is None:
+            logger.error(
+                "[NvimNotifications] Method {!r} not implemented, params: {}", method, parameters)
+            return
+
+        h_meth(parameters)
 
     # -- specific notification handlers
 
-    def _n__default_colors_set(self, colors):
+    def _n_redraw__default_colors_set(self, colors):
         """Set the default colors."""
         rgb_fg, rgb_bg, rgb_sp, _, _ = colors  # last two are ignored because are for terminals
         self.structs.setdefault("default_colors", {}).update({
@@ -91,23 +108,23 @@ class NvimNotifications:
         })
         self.dyncache.clean("default_colors")
 
-    def _n__flush(self, _):
+    def _n_redraw__flush(self, _):
         """Clear the grid."""
         self.text_display.flush()
 
-    def _n__grid_clear(self, args):
+    def _n_redraw__grid_clear(self, args):
         """Clear the grid."""
         (grid_id,) = args
         assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.clear()
 
-    def _n__grid_cursor_goto(self, args):
+    def _n_redraw__grid_cursor_goto(self, args):
         """Resize a grid."""
         grid_id, row, col = args
         assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.set_cursor(row, col)
 
-    def _n__grid_line(self, *args):
+    def _n_redraw__grid_line(self, *args):
         """Expose a line in the grid."""
         for item in args:
             grid, row, col_start, cells, wrap = item
@@ -116,19 +133,19 @@ class NvimNotifications:
             # note we ignore "wrap", couldn't find proper utility for it
             self.text_display.write_grid(row, col_start, cells)
 
-    def _n__grid_resize(self, args):
+    def _n_redraw__grid_resize(self, args):
         """Resize a grid."""
         grid_id, width, height = args
         assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.resize_view((width, height))
 
-    def _n__grid_scroll(self, args):
+    def _n_redraw__grid_scroll(self, args):
         """Scroll a grid."""
         grid_id, top, bottom, left, right, rows, cols = args
         assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.scroll((top, bottom, rows), (left, right, cols))
 
-    def _n__hl_attr_define(self, *args):
+    def _n_redraw__hl_attr_define(self, *args):
         """Add highlights with their attributes.
 
         E.g.: (
@@ -144,7 +161,7 @@ class NvimNotifications:
             hl_attrs[hl_id] = rgb_attr
         self.dyncache.clean("hl-attrs")
 
-    def _n__hl_group_set(self, *args):
+    def _n_redraw__hl_group_set(self, *args):
         """Set highlight groups.
 
         E.g.: [['SpecialKey', 161], ['EndOfBuffer', 161], ...]
@@ -154,14 +171,14 @@ class NvimNotifications:
             hl_groups[group_name] = hl_id
         self.dyncache.clean("hl-groups")
 
-    def _n__mode_change(self, args):
+    def _n_redraw__mode_change(self, args):
         """Information about cursor mode."""
         mode, mode_idx = args
         # we ignore the mode idx as we stored in the modes in a dict using the name
         mode_info = self.structs["mode-info"][mode]
         self.text_display.change_mode(mode_info)
 
-    def _n__mode_info_set(self, args):
+    def _n_redraw__mode_info_set(self, args):
         """Information about cursor mode."""
         cursor_style_enabled, mode_info = args
         assert cursor_style_enabled  # may it come in False? what do we do? delete previous modes?
@@ -176,15 +193,15 @@ class NvimNotifications:
         self.structs.setdefault("mode-info", {}).update(info)
         self.dyncache.clean("mode-info")
 
-    def _n__mouse_on(self, args):
+    def _n_redraw__mouse_on(self, args):
         """Properly ignored."""
 
-    def _n__mouse_off(self, args):
+    def _n_redraw__mouse_off(self, args):
         """Properly ignored."""
 
-    def _n__option_set(self, *options):
+    def _n_redraw__option_set(self, *options):
         options = dict(options)
-        logger.debug("[NvimManager] options set: {}", options)
+        logger.info("[NvimNotifications] options set: {}", options)
         self.options.update(options)
 
         # react to some of those options
@@ -194,18 +211,18 @@ class NvimNotifications:
             size = float(size[1:])
             self.text_display.set_font(name, size)
 
-    def _n__set_icon(self, param):
+    def _n_redraw__set_icon(self, param):
         """Set the icon, if any."""
         (icon,) = param
         if icon:
-            logger.warning("[NvimManager] need to implement set icon with {!r}", icon)
+            logger.warning("[NvimNotifications] need to implement set icon with {!r}", icon)
 
-    def _n__set_title(self, param):
+    def _n_redraw__set_title(self, param):
         """Set title."""
         (title,) = param
         self.main_window.setWindowTitle(title)
 
-    def _n__win_viewport(self, args):
+    def _n_redraw__win_viewport(self, args):
         """Information for the GUI viewport."""
         grid, objinfo, topline, botline, curline, curcol, line_count, scroll_delta = args
         # FIXME.90: ignore grid and objinfo so far, need to revisit this when multiwindow
