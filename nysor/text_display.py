@@ -416,8 +416,19 @@ class TextDisplay(BaseDisplay):
         painter.restore()
 
     def _paint_cursor_vertical(self, attr_id, percentage, painter, start_x, start_y, width):
-        """Draw a cursor as a block."""
+        """Draw a cursor as a vertical line."""
         rect = QRectF(start_x, start_y, width * percentage / 100, self.font_size.height)
+        assert attr_id == 0  # means inverting color, which is what we're only doing here
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
+        painter.fillRect(rect, Qt.GlobalColor.white)
+        painter.restore()
+
+    def _paint_cursor_horizontal(self, attr_id, percentage, painter, start_x, start_y, width):
+        """Draw a cursor as an horizontal line."""
+        from_y = start_y + self.font_size.height * (1 - percentage / 100)
+        height = self.font_size.height * percentage / 100
+        rect = QRectF(start_x, from_y, width, height)
         assert attr_id == 0  # means inverting color, which is what we're only doing here
         painter.save()
         painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
@@ -628,8 +639,11 @@ class TextDisplay(BaseDisplay):
             cursor_painter = partial(self._paint_cursor_block, cursor_attr_id)
         elif cursor_shape == "vertical":
             cursor_painter = partial(self._paint_cursor_vertical, cursor_attr_id, cursor_perc)
+        elif cursor_shape == "horizontal":
+            cursor_painter = partial(self._paint_cursor_horizontal, cursor_attr_id, cursor_perc)
         else:
             log_notdone("Cursor with this shape", shape=cursor_shape, percentage=cursor_perc)
+            return
         result_struct["cursor_painter"] = cursor_painter
 
         if mode_info:
