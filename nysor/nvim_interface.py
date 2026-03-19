@@ -148,19 +148,27 @@ class NvimInterface:
 
     async def call(self, method, *params):
         """Call a method with the indicated parameters and wait until result is available."""
-        holder = []
+        call_result = None
+        call_error = None
         event = asyncio.Event()
 
         def cback(result):
-            holder.append(result)
+            nonlocal call_result
+
+            call_result = result
             event.set()
 
         def eback(message):
-            raise NeovimError(message)
+            nonlocal call_error
+
+            call_error = message
+            event.set()
 
         await self._request(cback, eback, method, *params)
         await event.wait()
-        return holder[0]
+        if call_error:
+            raise NeovimError(call_error)
+        return call_result
 
     def future_request(self, method, *params):
         """Send a request in the future; response/error, if any, will be discarded."""
