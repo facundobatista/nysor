@@ -63,7 +63,7 @@ class NvimNotifications:
         self.structs = {}
         self.dyncache = DynamicCache()
 
-    def _h__redraw(self, parameters: list[Any]):
+    def _h__redraw(self, *parameters: tuple[Any]):
         """Handle the 'redraw' notification."""
         for submethod, *args in parameters:
             n_name = "_n_redraw__" + submethod
@@ -80,10 +80,13 @@ class NvimNotifications:
                 except Exception:
                     logger.exception("Crash when calling {!r} with {!r}", n_name, args)
 
-    def _h__modified_changed(self, parameters: list[Any]):
-        """Handle the 'modified_changed' notification."""
-        (is_modified,) = parameters
-        self.main_window.set_state(is_modified=is_modified)
+    def _h__modified_changed(self, is_modified: bool):
+        """Handle the notification when the buffer starts/stop having changes."""
+        self.main_window.set_buffer_state(is_modified=is_modified)
+
+    def _h__filepath_changed(self, filepath: str):
+        """Handle the notification when the buffer has a file associated or not."""
+        self.main_window.set_buffer_state(filepath=filepath)
 
     def handler(self, method: str, parameters: list[Any]):
         """Handle all notifications from Neovim."""
@@ -94,7 +97,7 @@ class NvimNotifications:
                 "[NvimNotifications] Method {!r} not implemented, params: {}", method, parameters)
             return
 
-        h_meth(parameters)
+        h_meth(*parameters)
 
     # -- specific notification handlers
 

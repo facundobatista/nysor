@@ -66,15 +66,11 @@ These are the items lousely grouped to get there:
     - File
         - Open
         - Save
-    - Help
-        - Open project page
-        - Create a new issue
-        - About Nysor
 - screenshot in README
 
 
 **For 0.6:**
-- Better version shown in the "About"
+- Show version in the "About"
 - The "create a new issue" should ask for a title and a text, and jump into a page prefill with indicated info, plus:
     - nysor version
     - qué version de neovim tiene
@@ -83,6 +79,13 @@ These are the items lousely grouped to get there:
     - let's see if Neovim supports through API telling it to open stdin
     - otherwise just make it work: open a temporary file with content retrieved from `stdin` and tell Neovim to use that
     - FIXME.92
+
+**For 0.7:**
+- Simplify/optimize the different `_paint_cursor_*`
+    - only have one that receives the precalculated values
+    - the value is calculated once (and cached), not on every call
+    - change that caching!
+
 
 **For 1.0:**
 
@@ -102,7 +105,7 @@ The path after that is less descriptive. The following are the big items I want 
 - try to separate, if possible, the windows for messages from the editor
     - not only from the Neovim *itself* (like `myfile.txt 23L, 10023B written`) but also from plugins, like linters
     - these windows should be easily resizeable, and with buttons somewhere to turn them on/off
-    - improve error management around "opening a file that was left open previously because of crashing or similar"
+    - have a pane specifically for "errors"? (what today is a pop-up)
 - add a treeview in the left of the window
     - simple, showing the directory where the process is run
     - if double click in a file, it should open a new window/tab with the new buffer

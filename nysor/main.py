@@ -12,6 +12,7 @@ import webbrowser
 
 import qasync
 from PyQt6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
@@ -23,7 +24,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon, QAction
 
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
-from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound
+from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications
 from nysor.text_display import TextDisplay
 
@@ -56,38 +57,42 @@ Written in Python, with Qt.<br/>
 class MainMenu:
     """Build and manage the main menu bar for the application."""
 
-    def __init__(self, app):
-        self._app = app
-        self._menu_bar = app.menuBar()
+    def __init__(self, main_window):
+        self._main_window = main_window
+        self._menu_bar = main_window.menuBar()
+        self.actions = {}
 
+        # FIXME.90 -- for multibuffers we need also a "New" option here
         menu_structure = {
             "&File": [
-                ("&open", self._on__file__open),
-                ("&Save", self._on__file__save),
+                ("&Open", "file__open"),
+                ("&Save", "file__save"),
+                ("&Save as...", "file__save_as"),
                 (None, None),
-                ("E&xit", self._on__file__exit),
+                ("E&xit", "file__exit"),
             ],
             "&Debug": [
-                ("Run a blocking call", self._on__debug__blocking_call),
-                ("Run an async task", self._on__debug__async_task),
+                ("Run a blocking call", "debug__blocking_call"),
+                ("Run an async task", "debug__async_task"),
             ],
             "&Help": [
-                ("Open &project page", self._on__help__open_project_page),
-                ("Create a new &issue", self._on__help__create_issue),
+                ("Open &project page", "help__open_project_page"),
+                ("Create a new &issue", "help__create_issue"),
                 (None, None),
-                ("&About Nysor", self._on__help__about),
+                ("&About Nysor", "help__about"),
             ],
         }
 
         for title, options in menu_structure.items():
             menu = self._menu_bar.addMenu(title)
-            for name, func in options:
-                if name is None:
+            for visible_name, name in options:
+                if visible_name is None:
                     menu.addSeparator()
                     continue
 
-                action = QAction(name, self._menu_bar)
-                action.triggered.connect(func)
+                action = QAction(visible_name, self._menu_bar)
+                action.triggered.connect(getattr(self, f"_on__{name}"))
+                self.actions[name] = action
                 menu.addAction(action)
 
     def _log_action(func):
@@ -100,17 +105,55 @@ class MainMenu:
     @_log_action
     def _on__file__open(self):
         """Open a file."""
-        print("File > Open")
+        # FIXME.90 -- for multibuffers, logic will change here:
+        # - if current buffer has any content, open the new file in a new panel
+        # - if current is empty, replace it
+
+        if self._main_window.state_buffer_is_modified:
+            dlg = QMessageBox(self._main_window)
+            dlg.setIcon(QMessageBox.Icon.Warning)
+            dlg.setWindowTitle("Cannot open new file")
+            dlg.setText(
+                "Current buffer is not saved, cannot open a new file to replace it. "
+                "Save the current buffer and try again."
+            )
+            dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            dlg.exec()
+            return
+
+        # indeed open a new file
+        filename, _ = QFileDialog.getOpenFileName(self._main_window, "Open File", "", "")
+        if filename:
+            self._main_window.open_file(filename)
 
     @_log_action
     def _on__file__save(self):
-        """Save the current file."""
-        print("File > Save")
+        """Save the buffer in the current file."""
+        if self._main_window.state_buffer_filepath:
+            logger.debug("Saving the buffer directly with current name")
+            self._main_window.buffer_save()
+        else:
+            filename, _ = QFileDialog.getSaveFileName(self._main_window, "Save File", "", "")
+            if filename:
+                logger.debug("Saving the buffer with new name {!r}", filename)
+                self._main_window.save_to_new_file(filename)
+            else:
+                logger.debug("Saving the buffer cancelled, no new name chosen")
+
+    @_log_action
+    def _on__file__save_as(self):
+        """Save the buffer in a new file."""
+        filename, _ = QFileDialog.getSaveFileName(self._main_window, "Save File", "", "")
+        if filename:
+            logger.debug("Saving the buffer with new name {!r}", filename)
+            self._main_window.save_to_new_file(filename)
+        else:
+            logger.debug("Saving the buffer cancelled, no new name chosen")
 
     @_log_action
     def _on__file__exit(self):
         """Exit the application."""
-        self._app.close_gui()
+        self._main_window.close_gui()
 
     @_log_action
     def _on__debug__blocking_call(self):
@@ -122,7 +165,7 @@ class MainMenu:
         """Run an async task; this is a test/dev helper."""
 
         async def async_task():
-            result = await self._app.nvi.call("nvim_list_uis")
+            result = await self._main_window.nvi.call("nvim_list_uis")
             logger.info("Code run in an async task, listing UIs from Neovim: {}", result)
 
         asyncio.create_task(async_task())
@@ -141,7 +184,7 @@ class MainMenu:
     def _on__help__about(self):
         """Show the About dialog."""
         msg = _ABOUT_TEXT
-        dlg = QMessageBox(self._app)
+        dlg = QMessageBox(self._main_window)
         dlg.setTextFormat(Qt.TextFormat.RichText)
         dlg.setIconPixmap(QIcon("media/icon-1024.png").pixmap(128, 128))
         dlg.setWindowTitle("About Nysor")
@@ -160,6 +203,8 @@ class MainApp(QMainWindow):
 
         logger.info("Starting Nysor")
         self._closing = 0
+        self.state_buffer_is_modified = False
+        self.state_buffer_filepath = None
         self.nvim_notifs = NvimNotifications(self)
 
         # setup the Neovim interface
@@ -209,23 +254,61 @@ class MainApp(QMainWindow):
         # rest of vertical widgets
         self.main_layout.addWidget(self.h_scroll)
 
+    def set_buffer_state(self, is_modified=None, filepath=None):
+        """Set the state state."""
+        # FIXME.90 -- all these needs to evolve to multibuffers
+        if is_modified is not None:
+            self.state_buffer_is_modified = is_modified
+            self._menu.actions["file__save"].setEnabled(is_modified)
+            self._menu.actions["file__open"].setEnabled(not is_modified)
+        if filepath is not None:
+            self.state_buffer_filepath = filepath
+
     async def setup_nvim(self, path_to_open):
         """Set up Neovim."""
-        _, api_metadata = await self.nvi.call("nvim_get_api_info")
+        channel_id, api_metadata = await self.nvi.call("nvim_get_api_info")
         version = api_metadata["version"]
         major = version["major"]
         minor = version["minor"]
         patch = version["patch"]
         logger.info("Neovim API info: version {}.{}.{}", major, minor, patch)
 
+        # attach the UI
         nvim_config = {"ext_linegrid": True}
         await self.nvi.call("nvim_ui_attach", 80, 20, nvim_config)
+
+        # subscribe to the buffer file change (will comeback as a 'set_buffer_state' call)
+        # FIXME.90 -- this needs to evolve to multibuffers
+        _code = f"""
+            vim.api.nvim_create_autocmd({{'BufFilePost'}}, {{
+                callback = function()
+                    local name = vim.api.nvim_buf_get_name(0)
+                    vim.rpcnotify({channel_id}, 'filepath_changed', name)
+                end
+            }})
+        """
+        await self.nvi.call("nvim_exec_lua", _code, [])
+
+        # subscribe to the buffer modified change (will comeback as a 'set_buffer_state' call)
+        # FIXME.90 -- this needs to evolve to multibuffers
+        _code = f"""
+            vim.api.nvim_create_autocmd({{'BufModifiedSet', 'BufWritePost'}}, {{
+                callback = function()
+                    vim.rpcnotify({channel_id}, 'modified_changed', vim.bo.modified)
+                end
+            }})
+        """
+        await self.nvi.call("nvim_exec_lua", _code, [])
+        self.set_buffer_state(is_modified=False)  # initially it's always not modified
 
         if path_to_open is not None:
             # FIXME.92: properly support "-" to read from stdin
             cmd = {"cmd": "edit", "args": [path_to_open]}
             opts = {"output": False}  # don't capture output
-            await self.nvi.call("nvim_cmd", cmd, opts)
+            try:
+                await self.nvi.call("nvim_cmd", cmd, opts)
+            except NeovimError as err:
+                log_notdone("Got error when opening the file {}, this should never happen", err)
 
     async def _quit(self):
         """Close the GUI after Neovim is down."""
@@ -371,6 +454,20 @@ class MainApp(QMainWindow):
             return
         self.h_scroll_last_position = value
         self.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
+
+    # -- set of functions to interact with buffers/neovim
+
+    def open_file(self, filename):
+        """Tell neovim to open a file and load into current buffer."""
+        self.nvi.future_request("nvim_command", f"edit {filename}")
+
+    def buffer_save(self):
+        """Save the current buffer."""
+        self.nvi.future_request("nvim_command", "write")
+
+    def save_to_new_file(self, filename):
+        """Save current buffer to a new filename."""
+        self.nvi.future_request("nvim_command", f"saveas {filename}")
 
 
 def start():
