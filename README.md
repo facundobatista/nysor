@@ -59,16 +59,6 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 
 These are the items lousely grouped to get there:
 
-**For 0.5:**
-
-
-- complete "GUI window"
-    - File
-        - Open
-        - Save
-- screenshot in README
-
-
 **For 0.6:**
 - Show version in the "About"
 - The "create a new issue" should ask for a title and a text, and jump into a page prefill with indicated info, plus:
