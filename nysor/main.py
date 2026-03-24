@@ -186,7 +186,7 @@ class MainMenu:
         msg = _ABOUT_TEXT
         dlg = QMessageBox(self._main_window)
         dlg.setTextFormat(Qt.TextFormat.RichText)
-        dlg.setIconPixmap(QIcon("media/icon-1024.png").pixmap(128, 128))
+        dlg.setIconPixmap(QIcon("nysor/imgs/icon-1024.png").pixmap(128, 128))
         dlg.setWindowTitle("About Nysor")
         dlg.setText(msg)
         dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
@@ -198,7 +198,7 @@ class MainApp(QMainWindow):
 
     def __init__(self, loop, path_to_open, nvim_exec_path):
         super().__init__()
-        self.setWindowIcon(QIcon("media/icon-1024.png"))
+        self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
         self._menu = MainMenu(self)
 
         logger.info("Starting Nysor")

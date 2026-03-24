@@ -204,7 +204,7 @@ class NvimNotifications:
 
     def _n_redraw__option_set(self, *options):
         options = dict(options)
-        logger.info("[NvimNotifications] options set: {}", options)
+        logger.debug("[NvimNotifications] options set: {}", options)
         self.options.update(options)
 
         # react to some of those options
