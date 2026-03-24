@@ -7,8 +7,10 @@
 import argparse
 import asyncio
 import logging
+import subprocess
 import sys
 import webbrowser
+from importlib.metadata import version, PackageNotFoundError
 
 import qasync
 from PyQt6.QtWidgets import (
@@ -43,7 +45,7 @@ The <span style="font-family:monospace; color:green">nvim</span> executable shou
 
 _ABOUT_TEXT = """
 <br/>
-<span style="font-size:+1"><b>Nysor</b></span><br/>
+<span style="font-size:+1"><b>Nysor</b> {version}</span><br/>
 <br/>
 Yet another graphical interface for Neovim.<br/>
 <br/>
@@ -52,6 +54,23 @@ Written in Python, with Qt.<br/>
 <br/>
 <small>Copyright 2025-2026 Facundo Batista</small><br/>
 """
+
+
+def get_version():
+    """Return the Nysor version, from the installed metadata, or fallback to git."""
+    try:
+        return version("nysor")
+    except PackageNotFoundError:
+        # package not installed, most probably being run from the project, fallback to git
+        pass
+
+    cmd = ["git", "describe", "--tags"]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if proc.returncode == 0:
+        git_version = proc.stdout.decode().strip()
+        return f"(git) {git_version}"
+
+    return "unknown"
 
 
 class MainMenu:
@@ -183,7 +202,7 @@ class MainMenu:
     @_log_action
     def _on__help__about(self):
         """Show the About dialog."""
-        msg = _ABOUT_TEXT
+        msg = _ABOUT_TEXT.format(version=self._main_window.nysor_version)
         dlg = QMessageBox(self._main_window)
         dlg.setTextFormat(Qt.TextFormat.RichText)
         dlg.setIconPixmap(QIcon("nysor/imgs/icon-1024.png").pixmap(128, 128))
@@ -200,8 +219,9 @@ class MainApp(QMainWindow):
         super().__init__()
         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
         self._menu = MainMenu(self)
+        self.nysor_version = get_version()
 
-        logger.info("Starting Nysor")
+        logger.info("Starting Nysor {}", self.nysor_version)
         self._closing = 0
         self.state_buffer_is_modified = False
         self.state_buffer_filepath = None
@@ -489,12 +509,20 @@ def start():
     # the rest of argument parsing
     parser.add_argument("--nvim", action="store", help="Path to the Neovim executable.")
     parser.add_argument(
+        "-V", "--version", action="store_true",
+        help="Show Nysor version and quit.",
+    )
+    parser.add_argument(
         "path", action="store", nargs="?", default=None,
         help="Path to the file to edit or directory to open (optional)"
     )
 
     # parse arguments
     args = parser.parse_args()
+
+    if args.version:
+        print("Nysor", get_version())
+        return 0
 
     # setup logging and create the app itself
     logsetup(args.loglevel)

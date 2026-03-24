@@ -75,6 +75,8 @@ These are the items lousely grouped to get there:
     - only have one that receives the precalculated values
     - the value is calculated once (and cached), not on every call
     - change that caching!
+- different Nysor runs should be different processes, but aware of them
+    - if you're trying to open the same file twice, it should not, the other editor should get focus
 
 
 **For 1.0:**
@@ -116,8 +118,6 @@ The path after that is less descriptive. The following are the big items I want 
     - if nothing is indicated, open it empty, with no treeview
 
 **For version 4:**
-- different Nysor runs should be different processes, but aware of them
-    - if you're trying to open the same file twice, it should not, the other editor should get focus
 - add functionality to the contextual window (when you right click on a word)
     - FIXME.93
     - to search that token in all the proyect ... maybe also in the project's virtual env?
