@@ -1,0 +1,9 @@
+global-exclude *
+
+include pyproject.toml
+include README.md
+include LICENSE
+
+recursive-include nysor *.py
+
+include nysor/imgs/*
