@@ -7,23 +7,32 @@
 import argparse
 import asyncio
 import logging
+import os
+import platform
 import subprocess
 import sys
 import webbrowser
 from importlib.metadata import version, PackageNotFoundError
+from urllib.parse import urlencode
 
 import qasync
 from PyQt6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QHBoxLayout,
+    QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QScrollBar,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon, QAction
+
 
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
@@ -55,8 +64,18 @@ Written in Python, with Qt.<br/>
 <small>Copyright 2025-2026 Facundo Batista</small><br/>
 """
 
+_NEW_ISSUE_TEXT = """\
+{description}
 
-def get_version():
+---
+Automatically Included System Information:
+```
+{info}
+```
+"""
+
+
+def get_nysor_version():
     """Return the Nysor version, from the installed metadata, or fallback to git."""
     try:
         return version("nysor")
@@ -71,6 +90,99 @@ def get_version():
         return f"(git) {git_version}"
 
     return "unknown"
+
+
+def get_system_info():
+    """Return versions of system."""
+    info = {}
+
+    # Python
+    info["Python Version"] = sys.version
+    info["Python Executable"] = sys.executable
+
+    # OS
+    info["Platform"] = platform.platform()
+    info["System"] = platform.system()
+    info["Release"] = platform.release()
+
+    # Desktop / entorno gráfico
+    info["Desktop"] = os.environ.get("XDG_CURRENT_DESKTOP", "unknown")
+    info["Wayland"] = os.environ.get("WAYLAND_DISPLAY", "none")
+    info["Display"] = os.environ.get("DISPLAY", "none")
+
+    return info
+
+
+def open_new_issue_page(title, description):
+    """Open a new issue page in the browser with all the info prefilled."""
+    # build body
+    parts = [f"{k}: {v}" for k, v in get_system_info().items()]
+    info = "\n".join(parts) + "\n"
+    body = _NEW_ISSUE_TEXT.format(description=description, info=info)
+
+    # build url
+    base = "https://github.com/facundobatista/nysor/issues/new"
+    params = {
+        "title": title,
+        "body": body,
+        "labels": "auto"
+    }
+    url = base + "?" + urlencode(params)
+
+    # open
+    webbrowser.open(url)
+
+
+class CreateIssueDialog(QDialog):
+    """Dialog for user to input information to create an issue."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setWindowTitle("Report an Issue")
+        self.setMinimumWidth(500)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(QLabel("Create a new issue on GitHub..."))
+
+        layout.addWidget(QLabel("Title"))
+        self.title_edit = QLineEdit()
+        self.title_edit.setPlaceholderText("Add a title")
+        self.title_edit.textChanged.connect(self._update_create_button)
+        layout.addWidget(self.title_edit)
+
+        layout.addWidget(QLabel("Description"))
+        self.descrip_edit = QTextEdit()
+        self.descrip_edit.setPlaceholderText("Add a description")
+        self.descrip_edit.setMinimumHeight(150)
+        self.descrip_edit.textChanged.connect(self._update_create_button)
+        layout.addWidget(self.descrip_edit)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setDefault(True)
+        cancel_button.clicked.connect(self.reject)
+        button_layout.addWidget(cancel_button)
+
+        self.create_button = QPushButton("Create issue in GitHub")
+        self.create_button.clicked.connect(self.accept)
+        self.create_button.setEnabled(False)
+        button_layout.addWidget(self.create_button)
+
+        layout.addLayout(button_layout)
+
+    def _update_create_button(self):
+        """Enable or disable the create button according to the provided values."""
+        has_values = all(v for v in self.get_values().values())
+        self.create_button.setEnabled(has_values)
+
+    def get_values(self):
+        """Return values from user inputs."""
+        return {
+            "title": self.title_edit.text().strip(),
+            "description": self.descrip_edit.toPlainText().strip(),
+        }
 
 
 class MainMenu:
@@ -197,7 +309,12 @@ class MainMenu:
     @_log_action
     def _on__help__create_issue(self):
         """Open the issue tracker in the browser."""
-        webbrowser.open("https://github.com/facundobatista/nysor/issues/new")
+        dialog = CreateIssueDialog(self._main_window)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        values = dialog.get_values()
+        open_new_issue_page(values["title"], values["description"])
 
     @_log_action
     def _on__help__about(self):
@@ -219,7 +336,8 @@ class MainApp(QMainWindow):
         super().__init__()
         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
         self._menu = MainMenu(self)
-        self.nysor_version = get_version()
+        self.nysor_version = get_nysor_version()
+        self.nvim_version = "?"  # will be set in the setup
 
         logger.info("Starting Nysor {}", self.nysor_version)
         self._closing = 0
@@ -288,10 +406,8 @@ class MainApp(QMainWindow):
         """Set up Neovim."""
         channel_id, api_metadata = await self.nvi.call("nvim_get_api_info")
         version = api_metadata["version"]
-        major = version["major"]
-        minor = version["minor"]
-        patch = version["patch"]
-        logger.info("Neovim API info: version {}.{}.{}", major, minor, patch)
+        self.nvim_version = "{major}.{minor}.{patch}".format(**version)
+        logger.info("Neovim API info: version {}", self.nvim_version)
 
         # attach the UI
         nvim_config = {"ext_linegrid": True}
@@ -521,7 +637,7 @@ def start():
     args = parser.parse_args()
 
     if args.version:
-        print("Nysor", get_version())
+        print("Nysor", get_nysor_version())
         return 0
 
     # setup logging and create the app itself

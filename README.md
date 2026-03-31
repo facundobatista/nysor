@@ -60,11 +60,6 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 These are the items lousely grouped to get there:
 
 **For 0.6:**
-- Show version in the "About"
-- The "create a new issue" should ask for a title and a text, and jump into a page prefill with indicated info, plus:
-    - nysor version
-    - qué version de neovim tiene
-    - environment (OS, etc)
 - if "`-`" is the parameter, it should handle `stdin`
     - let's see if Neovim supports through API telling it to open stdin
     - otherwise just make it work: open a temporary file with content retrieved from `stdin` and tell Neovim to use that
