@@ -337,7 +337,6 @@ class MainApp(QMainWindow):
         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
         self._menu = MainMenu(self)
         self.nysor_version = get_nysor_version()
-        self.nvim_version = "?"  # will be set in the setup
 
         logger.info("Starting Nysor {}", self.nysor_version)
         self._closing = 0
@@ -403,11 +402,12 @@ class MainApp(QMainWindow):
             self.state_buffer_filepath = filepath
 
     async def setup_nvim(self, path_to_open):
-        """Set up Neovim."""
-        channel_id, api_metadata = await self.nvi.call("nvim_get_api_info")
-        version = api_metadata["version"]
-        self.nvim_version = "{major}.{minor}.{patch}".format(**version)
-        logger.info("Neovim API info: version {}", self.nvim_version)
+        """Set up Neovim from the GUI PoV.
+
+        This comes in tandem with the Neovim internal setup, so the first thing we do is to
+        wait that one to finish.
+        """
+        await self.nvi.setup_completed_event.wait()
 
         # attach the UI
         nvim_config = {"ext_linegrid": True}
@@ -419,7 +419,7 @@ class MainApp(QMainWindow):
             vim.api.nvim_create_autocmd({{'BufFilePost'}}, {{
                 callback = function()
                     local name = vim.api.nvim_buf_get_name(0)
-                    vim.rpcnotify({channel_id}, 'filepath_changed', name)
+                    vim.rpcnotify({self.nvi.channel_id}, 'filepath_changed', name)
                 end
             }})
         """
@@ -430,7 +430,7 @@ class MainApp(QMainWindow):
         _code = f"""
             vim.api.nvim_create_autocmd({{'BufModifiedSet', 'BufWritePost'}}, {{
                 callback = function()
-                    vim.rpcnotify({channel_id}, 'modified_changed', vim.bo.modified)
+                    vim.rpcnotify({self.nvi.channel_id}, 'modified_changed', vim.bo.modified)
                 end
             }})
         """

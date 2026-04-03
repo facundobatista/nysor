@@ -17,12 +17,8 @@ import msgpack
 # do not poll more frequently than these seconds
 POLL_FREEZE_PERIOD = 0.005
 
-# some Neovim translation constants
-_EXT_TYPE_CODES = {
-    1: "window",
-    2: "buffer",
-    3: "tabpage",
-}
+# some Neovim translation constants; this is filled by the API info
+_EXT_TYPE_CODES = {}
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +90,7 @@ class NvimInterface:
         self._client.setblocking(False)
         self._client.connect(_sock_path)
         self._loop.add_reader(self._client, self._receive_responses)
-        logger.info("Neovim setup done")
+        logger.info("Neovim connection done")
 
         self._callbacks = {}
         self._cb_counter = 0
@@ -102,6 +98,27 @@ class NvimInterface:
         self.last_poll_timestamp = 0
 
         self._msg_unpacker = msgpack.Unpacker(raw=False, ext_hook=ext_hook)
+
+        # execute _get_api_info asynchronously in the future the to finish setup (and fill
+        # these structures we define here as a placeholder)
+        self.channel_id = None
+        self.nvim_version = None
+        self.setup_completed_event = asyncio.Event()
+        self._loop.create_task(self._get_api_info())
+
+    async def _get_api_info(self):
+        """Retrieve the API info from Neovim and fill some internal structures."""
+        self.channel_id, api_metadata = await self.call("nvim_get_api_info")
+
+        # 'types': {'Buffer': {'id': 0, 'prefix': 'nvim_buf_'}, 'Window': {'id': 1, ...
+        nvim_types = api_metadata["types"]
+        for name, info in nvim_types.items():
+            _EXT_TYPE_CODES[info["id"]] = name
+
+        version = api_metadata["version"]
+        self.nvim_version = "{major}.{minor}.{patch}".format(**version)
+        logger.info("Neovim API info: version {}", self.nvim_version)
+        self.setup_completed_event.set()
 
     def _get_unique_sock_path(self):
         """Return an unique path, validating it's not in disk."""
