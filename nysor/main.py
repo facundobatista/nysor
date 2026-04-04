@@ -11,6 +11,7 @@ import os
 import platform
 import subprocess
 import sys
+import tempfile
 import webbrowser
 from importlib.metadata import version, PackageNotFoundError
 from urllib.parse import urlencode
@@ -437,14 +438,40 @@ class MainApp(QMainWindow):
         await self.nvi.call("nvim_exec_lua", _code, [])
         self.set_buffer_state(is_modified=False)  # initially it's always not modified
 
+        # if a source is indicated, open it, differentiating if it's a file or standard input
         if path_to_open is not None:
-            # FIXME.92: properly support "-" to read from stdin
-            cmd = {"cmd": "edit", "args": [path_to_open]}
-            opts = {"output": False}  # don't capture output
+            if path_to_open == "-":
+                await self._feed_neovim_from_stdin()
+            else:
+                await self._feed_neovim_from_path(path_to_open)
+
+    async def _feed_neovim_from_stdin(self):
+        """Feed neovim with data read from standard input."""
+        temp_fd, temp_filepath = tempfile.mkstemp(prefix="nysor_stdin_")
+        stdin_fd = sys.stdin.fileno()
+        while True:
             try:
-                await self.nvi.call("nvim_cmd", cmd, opts)
-            except NeovimError as err:
-                log_notdone("Got error when opening the file {}, this should never happen", err)
+                transferred = os.splice(stdin_fd, temp_fd, 1024 * 1024)
+            except OSError:
+                # this happens when stdin was not open in first place
+                logger.warning(
+                    "Got OSError when reading from stding; "
+                    "are you sure you piped data in?"
+                )
+                return
+            if transferred == 0:  # EOF
+                break
+        os.close(temp_fd)
+        await self._feed_neovim_from_path(temp_filepath)
+
+    async def _feed_neovim_from_path(self, path_to_open):
+        """Indicate neovim to open a file from a path."""
+        cmd = {"cmd": "edit", "args": [path_to_open]}
+        opts = {"output": False}  # don't capture output
+        try:
+            await self.nvi.call("nvim_cmd", cmd, opts)
+        except NeovimError as err:
+            log_notdone("Got error when opening the file {}, this should never happen", err)
 
     async def _quit(self):
         """Close the GUI after Neovim is down."""
