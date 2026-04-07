@@ -34,7 +34,7 @@ You call it from the project (no packaging yet), but previously you need to crea
 ```
 …/nysor$ python3 -m venv env
 …/nysor$ source env/bin/activate
-(env) …/nysor$ pip install -r requirements.txt
+(env) …/nysor$ pip install -e ".[dev]"
 (env) …/nysor$ python -m nysor
 ```
 
