@@ -7,6 +7,7 @@
 import asyncio
 import os
 import socket
+import uuid
 from unittest.mock import MagicMock
 
 import msgpack
@@ -30,8 +31,8 @@ from nysor.nvim_interface import (
 class NeovimMock:
     """Real Unix socket server speaking msgpack-RPC, for testing NvimInterface."""
 
-    def __init__(self, tmp_path):
-        self.sock_path = str(tmp_path / "nvim.sock")
+    def __init__(self, sock_path):
+        self.sock_path = sock_path
         self.proc = MagicMock()
         self.proc.poll.return_value = None
         self._server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -106,9 +107,24 @@ _API_RESPONSE = [
 
 
 @pytest.fixture
-async def nvim(mocker, tmp_path):
+def sock_path():
+    """Provide a short socket path and clean it up after the test.
+
+    We need to do this manually as if we rely on tmp_path the result socket path is
+    too long for what is allowed in MacOS.
+    """
+    path = f".tmptest-{uuid.uuid4().hex[:8]}.s"
+    try:
+        yield path
+    finally:
+        if os.path.exists(path):
+            os.unlink(path)
+
+
+@pytest.fixture
+async def nvim(mocker, sock_path):
     """NvimInterface connected to a NeovimMock, with _get_api_info mocked out."""
-    mock = NeovimMock(tmp_path)
+    mock = NeovimMock(sock_path)
     mocker.patch.object(NvimInterface, "_get_api_info")
     mocker.patch.object(NvimInterface, "_get_unique_sock_path", return_value=mock.sock_path)
     mocker.patch("nysor.nvim_interface.subprocess.Popen", return_value=mock.proc)
@@ -121,9 +137,9 @@ async def nvim(mocker, tmp_path):
 
 
 @pytest.fixture
-async def nvim_with_api(mocker, tmp_path):
+async def nvim_with_api(mocker, sock_path):
     """NvimInterface with real _get_api_info; mock responds to nvim_get_api_info."""
-    mock = NeovimMock(tmp_path)
+    mock = NeovimMock(sock_path)
     mocker.patch.dict(_EXT_TYPE_CODES, {}, clear=True)
     mocker.patch.object(NvimInterface, "_get_unique_sock_path", return_value=mock.sock_path)
     mocker.patch("nysor.nvim_interface.subprocess.Popen", return_value=mock.proc)
@@ -180,9 +196,9 @@ class TestGetUniqueSockPath:
 
 class TestNvimInterfaceInit:
 
-    async def test_normal_startup(self, tmp_path, mocker):
+    async def test_normal_startup(self, mocker, sock_path):
         """Process is launched with the correct arguments on normal startup."""
-        mock = NeovimMock(tmp_path)
+        mock = NeovimMock(sock_path)
         mocker.patch.object(NvimInterface, "_get_api_info")
         mocker.patch.object(NvimInterface, "_get_unique_sock_path", return_value=mock.sock_path)
         popen_mock = mocker.patch("nysor.nvim_interface.subprocess.Popen", return_value=mock.proc)
@@ -192,9 +208,9 @@ class TestNvimInterfaceInit:
         popen_mock.assert_called_once_with(["nvim", "--headless", "--listen", mock.sock_path])
         mock.close()
 
-    async def test_default_exec_path(self, tmp_path, mocker):
+    async def test_default_exec_path(self, mocker, sock_path):
         """None as exec path defaults to 'nvim'."""
-        mock = NeovimMock(tmp_path)
+        mock = NeovimMock(sock_path)
         mocker.patch.object(NvimInterface, "_get_api_info")
         mocker.patch.object(NvimInterface, "_get_unique_sock_path", return_value=mock.sock_path)
         popen_mock = mocker.patch("nysor.nvim_interface.subprocess.Popen", return_value=mock.proc)
@@ -204,9 +220,9 @@ class TestNvimInterfaceInit:
         assert popen_mock.call_args[0][0][0] == "nvim"
         mock.close()
 
-    def test_executable_not_found(self, tmp_path, mocker):
+    def test_executable_not_found(self, mocker, sock_path):
         """FileNotFoundError from Popen raises NeovimExecutableNotFound."""
-        mock = NeovimMock(tmp_path)
+        mock = NeovimMock(sock_path)
         mocker.patch.object(NvimInterface, "_get_unique_sock_path", return_value=mock.sock_path)
         mocker.patch("nysor.nvim_interface.subprocess.Popen", side_effect=FileNotFoundError)
         with pytest.raises(NeovimExecutableNotFound):
