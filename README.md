@@ -38,6 +38,8 @@ You call it from the project (no packaging yet), but previously you need to crea
 (env) …/nysor$ python -m nysor
 ```
 
+It should work just fine in Linux and MacOS. If you want for it to run in Windows, me too, but I lack for a testing environment, *let's talk*.
+
 You can indicate it to open a file to edit:
 ```
 (env) …/nysor$ python -m nysor myfile.txt
