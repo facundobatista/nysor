@@ -61,9 +61,6 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 
 These are the items lousely grouped to get there:
 
-**For 0.6:**
-- test nvim x 2
-
 **For 0.7:**
 - Simplify/optimize the different `_paint_cursor_*`
     - only have one that receives the precalculated values

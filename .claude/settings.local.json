@@ -4,7 +4,8 @@
       "Bash(pytest tests/test_nvim_interface.py -x 2>&1)",
       "Bash(pytest tests/test_nvim_interface.py -x --timeout=5 2>&1)",
       "Bash(pytest tests/test_nvim_interface.py -x -v --timeout=5 2>&1)",
-      "Bash(pytest tests/ --timeout=10 2>&1)"
+      "Bash(pytest tests/ --timeout=10 2>&1)",
+      "Bash(pytest tests/test_nvim_notifications.py -v --timeout=10 2>&1)"
     ]
   }
 }
