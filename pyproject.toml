@@ -33,6 +33,10 @@ dynamic = ["version"]
 dev = [
     "codespell",
     "pytest",
+    "logassert",
+    "pytest-asyncio",
+    "pytest-mock",
+    "time-machine",
     "ruff",
 ]
 
@@ -46,6 +50,7 @@ Issues = "https://github.com/facundobatista/nysor/issues"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["setuptools>=64", "setuptools-scm"]

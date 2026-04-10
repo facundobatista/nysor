@@ -34,9 +34,11 @@ You call it from the project (no packaging yet), but previously you need to crea
 ```
 …/nysor$ python3 -m venv env
 …/nysor$ source env/bin/activate
-(env) …/nysor$ pip install -r requirements.txt
+(env) …/nysor$ pip install -e ".[dev]"
 (env) …/nysor$ python -m nysor
 ```
+
+It should work just fine in Linux and MacOS. If you want for it to run in Windows, me too, but I lack for a testing environment, *let's talk*.
 
 You can indicate it to open a file to edit:
 ```
@@ -58,9 +60,6 @@ These are the plans for the future. They are quite informal, the idea is to foll
 The idea is to have a solid editor in one window for version 1.0; there will be not much more functionality than it currently exists, but it should improve in quality.
 
 These are the items lousely grouped to get there:
-
-**For 0.6:**
-- test nvim x 2
 
 **For 0.7:**
 - Simplify/optimize the different `_paint_cursor_*`
