@@ -68,6 +68,12 @@ These are the items lousely grouped to get there:
     - change that caching!
 - different Nysor runs should be different processes, but aware of them
     - if you're trying to open the same file twice, it should not, the other editor should get focus
+- try to separate, if possible, the command bar from Neovim's grid itself
+    - add better history and ways to search/filter previous commands
+- try to separate, if possible, the windows for messages from the editor
+    - not only from the Neovim *itself* (like `myfile.txt 23L, 10023B written`) but also from plugins, like linters
+    - these windows should be easily resizeable, and with buttons somewhere to turn them on/off
+    - have a pane specifically for "errors"? (what today is a pop-up)
 
 
 **For 1.0:**
@@ -83,12 +89,6 @@ These are the items lousely grouped to get there:
 The path after that is less descriptive. The following are the big items I want to add to the editor in the following versions:
 
 **For version 2:**
-- try to separate, if possible, the command bar from Neovim's grid itself
-    - add better history and ways to search/filter previous commands
-- try to separate, if possible, the windows for messages from the editor
-    - not only from the Neovim *itself* (like `myfile.txt 23L, 10023B written`) but also from plugins, like linters
-    - these windows should be easily resizeable, and with buttons somewhere to turn them on/off
-    - have a pane specifically for "errors"? (what today is a pop-up)
 - add a treeview in the left of the window
     - simple, showing the directory where the process is run
     - if double click in a file, it should open a new window/tab with the new buffer

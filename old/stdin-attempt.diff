@@ -1,0 +1,102 @@
+diff --git a/nysor/main.py b/nysor/main.py
+index f4f8857..cdeff99 100644
+--- a/nysor/main.py
++++ b/nysor/main.py
+@@ -336,6 +336,7 @@ class MainApp(QMainWindow):
+         super().__init__()
+         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
+         self._menu = MainMenu(self)
++        self._loop = loop
+         self.nysor_version = get_nysor_version()
+         self.nvim_version = "?"  # will be set in the setup
+ 
+@@ -438,13 +439,62 @@ class MainApp(QMainWindow):
+         self.set_buffer_state(is_modified=False)  # initially it's always not modified
+ 
+         if path_to_open is not None:
+-            # FIXME.92: properly support "-" to read from stdin
+-            cmd = {"cmd": "edit", "args": [path_to_open]}
+-            opts = {"output": False}  # don't capture output
+-            try:
+-                await self.nvi.call("nvim_cmd", cmd, opts)
+-            except NeovimError as err:
+-                log_notdone("Got error when opening the file {}, this should never happen", err)
++            if path_to_open == "-":
++                await self._feed_neovim_from_stdin()
++            else:
++                await self._feed_neovim_from_path(path_to_open)
++
++    async def _feed_neovim_from_stdin(self):
++        """Feed neovim with data read from standard input."""
++
++        async def async_stdin_lines():
++            reader = asyncio.StreamReader()
++            await self._loop.connect_read_pipe(
++                lambda: asyncio.StreamReaderProtocol(reader), sys.stdin
++            )
++            async for line in reader:
++                print("=========== read line!", repr(line))
++                yield line.decode()
++
++
++        # DEBUG!!!!!!!!!!!!!1
++        api_info = await self.nvi.call("nvim_get_api_info")
++        print("====== AI", api_info)
++
++        # crear buffer vacío
++        buf = await self.nvi.call(
++            "nvim_create_buf",
++            True,  # 'listed': the buffer will show up in the buffer list
++            False,  # 'scratch': do not create a "throwaway" scratch-buffer for temporary work
++        )
++        if buf == 0:
++            logger.error("Got no buffer when trying to handle stdin")
++            return
++
++        await self.nvi.call("nvim_set_current_buf", buf)
++        await self.nvi.call("nvim_cmd", {"cmd": "file", "args": ["[stdin]"]}, {"output": False})
++
++        line_num = 0
++        async for line in async_stdin_lines():
++            print("========= feed line", repr(line))
++            await self.nvi.call(
++                "nvim_buf_set_lines",
++                buf,
++                line_num,  # 'start': first line index
++                line_num,  # 'end': last line index, exclusive
++                False,  # 'strict_indexing': whether out-of-bounds should be an error
++                [line.rstrip("\n")],  # array of lines
++            )
++            line_num += 1
++
++    async def _feed_neovim_from_path(self, path_to_open):
++        """Indicate neovim to open a file from a path."""
++        cmd = {"cmd": "edit", "args": [path_to_open]}
++        opts = {"output": False}  # don't capture output
++        try:
++            await self.nvi.call("nvim_cmd", cmd, opts)
++        except NeovimError as err:
++            log_notdone("Got error when opening the file {}, this should never happen", err)
+ 
+     async def _quit(self):
+         """Close the GUI after Neovim is down."""
+diff --git a/nysor/nvim_interface.py b/nysor/nvim_interface.py
+index c1241d1..de9d384 100644
+--- a/nysor/nvim_interface.py
++++ b/nysor/nvim_interface.py
+@@ -19,6 +19,7 @@ POLL_FREEZE_PERIOD = 0.005
+ 
+ # some Neovim translation constants
+ _EXT_TYPE_CODES = {
++    0: "FIXME",
+     1: "window",
+     2: "buffer",
+     3: "tabpage",
+@@ -213,6 +214,7 @@ class NvimInterface:
+             if not data:
+                 break
+ 
++            print("============ raw data", repr(data))
+             self._msg_unpacker.feed(data)
+             for msg in self._msg_unpacker:
+                 yield msg
