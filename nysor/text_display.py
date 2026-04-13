@@ -406,34 +406,29 @@ class TextDisplay(BaseDisplay):
         """Set the cursor position in the display."""
         self.cursor_pos = (row, col)
 
-    def _paint_cursor_block(self, attr_id, painter, start_x, start_y, width):
+    def _paint_cursor(self, painter, rect):
+        """Draw a cursor using the received rectangle."""
+        painter.save()
+        painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
+        painter.fillRect(rect, Qt.GlobalColor.white)
+        painter.restore()
+
+    def _paint_cursor_block(self, painter, start_x, start_y, width):
         """Draw a cursor as a block."""
         rect = QRectF(start_x, start_y, width, self.font_size.height)
-        assert attr_id == 0  # means inverting color, which is what we're only doing here
-        painter.save()
-        painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
-        painter.fillRect(rect, Qt.GlobalColor.white)
-        painter.restore()
+        self._paint_cursor(painter, rect)
 
-    def _paint_cursor_vertical(self, attr_id, percentage, painter, start_x, start_y, width):
+    def _paint_cursor_vertical(self, percentage, painter, start_x, start_y, width):
         """Draw a cursor as a vertical line."""
-        rect = QRectF(start_x, start_y, width * percentage / 100, self.font_size.height)
-        assert attr_id == 0  # means inverting color, which is what we're only doing here
-        painter.save()
-        painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
-        painter.fillRect(rect, Qt.GlobalColor.white)
-        painter.restore()
+        rect = QRectF(start_x, start_y, width * percentage, self.font_size.height)
+        self._paint_cursor(painter, rect)
 
-    def _paint_cursor_horizontal(self, attr_id, percentage, painter, start_x, start_y, width):
+    def _paint_cursor_horizontal(self, percentage, painter, start_x, start_y, width):
         """Draw a cursor as an horizontal line."""
-        from_y = start_y + self.font_size.height * (1 - percentage / 100)
-        height = self.font_size.height * percentage / 100
+        from_y = start_y + self.font_size.height * (1 - percentage)
+        height = self.font_size.height * percentage
         rect = QRectF(start_x, from_y, width, height)
-        assert attr_id == 0  # means inverting color, which is what we're only doing here
-        painter.save()
-        painter.setCompositionMode(QPainter.CompositionMode.RasterOp_SourceXorDestination)
-        painter.fillRect(rect, Qt.GlobalColor.white)
-        painter.restore()
+        self._paint_cursor(painter, rect)
 
     def _get_drawing_widths(self, logical_char):
         """Define the values for placing chars in the line.
@@ -633,14 +628,17 @@ class TextDisplay(BaseDisplay):
 
         # we need a cursor, be gentle with input and default to a full block
         cursor_shape = mode_info.pop("cursor_shape", "block")
-        cursor_perc = mode_info.pop("cell_percentage", 20)
+        cursor_perc = mode_info.pop("cell_percentage", 20) / 100
         cursor_attr_id = mode_info.pop("attr_id", 0)
+        if cursor_attr_id != 0:
+            # log the problem, but continue as it would be inverting
+            log_notdone("We only support inverting color for cursors", attr_id=cursor_attr_id)
         if cursor_shape == "block":
-            cursor_painter = partial(self._paint_cursor_block, cursor_attr_id)
+            cursor_painter = partial(self._paint_cursor_block)
         elif cursor_shape == "vertical":
-            cursor_painter = partial(self._paint_cursor_vertical, cursor_attr_id, cursor_perc)
+            cursor_painter = partial(self._paint_cursor_vertical, cursor_perc)
         elif cursor_shape == "horizontal":
-            cursor_painter = partial(self._paint_cursor_horizontal, cursor_attr_id, cursor_perc)
+            cursor_painter = partial(self._paint_cursor_horizontal, cursor_perc)
         else:
             log_notdone("Cursor with this shape", shape=cursor_shape, percentage=cursor_perc)
             return
