@@ -38,6 +38,7 @@ from PyQt6.QtGui import QIcon, QAction
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications
+from nysor.swarm import Swarm
 from nysor.text_display import TextDisplay
 
 logger = logging.getLogger(__name__)
@@ -362,7 +363,8 @@ class MainApp(QMainWindow):
             dlg.exec()
             exit(1)
 
-        loop.create_task(self.setup_nvim(path_to_open))
+        self.swarm = Swarm(loop)
+        loop.create_task(self.setup_all(path_to_open))
 
         # scrollbars
         self.v_scroll = QScrollBar(Qt.Orientation.Vertical)
@@ -394,6 +396,7 @@ class MainApp(QMainWindow):
 
     def set_buffer_state(self, is_modified=None, filepath=None):
         """Set the state state."""
+        logger.debug("Set buffer state; is_modified={} filepath={}", is_modified, filepath)
         # FIXME.90 -- all these needs to evolve to multibuffers
         if is_modified is not None:
             self.state_buffer_is_modified = is_modified
@@ -401,6 +404,38 @@ class MainApp(QMainWindow):
             self._menu.actions["file__open"].setEnabled(not is_modified)
         if filepath is not None:
             self.state_buffer_filepath = filepath
+
+    async def setup_all(self, path_to_open):
+        """Proceed for all setups, if needed."""
+        abort = await self.setup_swarm(path_to_open)
+        if abort:
+            print("=========== abort!!!!")
+            return
+        await self.setup_nvim(path_to_open)
+
+    async def setup_swarm(self, path_to_open):
+        """Setup the swarm and return if we need to stop the startup process."""
+        if path_to_open is not None:
+            already_handled = await self.swarm.discover(path_to_open)
+            print("=============== AH", repr(already_handled))
+            if already_handled:
+                logger.info("Aborting startup as the path is already open in other Nysor process")
+                return self.close_gui()
+
+        def cb_has_path(path):
+            """Indicate if the given path is opened here."""
+            # FIXME.90: this verification will change when multibuffers
+            is_here = path == self.state_buffer_filepath
+            if is_here:
+                # we have somebody else's path, claim attention!
+                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+                self.show()
+                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
+                self.show()
+            return is_here
+
+        # FIXME
+        self.swarm.listen(cb_has_path)
 
     async def setup_nvim(self, path_to_open):
         """Set up Neovim from the GUI PoV.
@@ -417,7 +452,7 @@ class MainApp(QMainWindow):
         # subscribe to the buffer file change (will comeback as a 'set_buffer_state' call)
         # FIXME.90 -- this needs to evolve to multibuffers
         _code = f"""
-            vim.api.nvim_create_autocmd({{'BufFilePost'}}, {{
+            vim.api.nvim_create_autocmd({{'BufFilePost', 'BufReadPost'}}, {{
                 callback = function()
                     local name = vim.api.nvim_buf_get_name(0)
                     vim.rpcnotify({self.nvi.channel_id}, 'filepath_changed', name)
@@ -471,7 +506,7 @@ class MainApp(QMainWindow):
         try:
             await self.nvi.call("nvim_cmd", cmd, opts)
         except NeovimError as err:
-            log_notdone("Got error when opening the file {}, this should never happen", err)
+            log_notdone("Got error when opening the file, this should never happen", err=err)
 
     async def _quit(self):
         """Close the GUI after Neovim is down."""
@@ -511,6 +546,7 @@ class MainApp(QMainWindow):
         if self._closing == 0:
             # initiate the process to close; ignore the event so GUI is still alive, but
             # start internal procedures
+            self.swarm.close()
             self._closing = 1
             if event is not None:
                 event.ignore()
