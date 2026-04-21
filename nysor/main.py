@@ -35,10 +35,10 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QIcon, QAction
 
 
+from nysor import swarm
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications
-from nysor.swarm import Swarm
 from nysor.text_display import TextDisplay
 
 logger = logging.getLogger(__name__)
@@ -75,6 +75,9 @@ Automatically Included System Information:
 {info}
 ```
 """
+
+# the special path that indicates to read from stdin
+SPECIAL_STDIN_PATH = "-"
 
 
 def get_nysor_version():
@@ -334,13 +337,12 @@ class MainMenu:
 class MainApp(QMainWindow):
     """The main application window."""
 
-    def __init__(self, loop, path_to_open, nvim_exec_path):
+    def __init__(self, version, loop, path_to_open, nvim_exec_path):
         super().__init__()
         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
         self._menu = MainMenu(self)
-        self.nysor_version = get_nysor_version()
+        self.nysor_version = version
 
-        logger.info("Starting Nysor {}", self.nysor_version)
         self._closing = 0
         self.state_buffer_is_modified = False
         self.state_buffer_filepath = None
@@ -363,8 +365,8 @@ class MainApp(QMainWindow):
             dlg.exec()
             exit(1)
 
-        self.swarm = Swarm(loop)
-        loop.create_task(self.setup_all(path_to_open))
+        self._swarm = swarm.SwarmServer(loop, self._path_discover_cb)
+        loop.create_task(self.setup_nvim(path_to_open))
 
         # scrollbars
         self.v_scroll = QScrollBar(Qt.Orientation.Vertical)
@@ -405,37 +407,17 @@ class MainApp(QMainWindow):
         if filepath is not None:
             self.state_buffer_filepath = filepath
 
-    async def setup_all(self, path_to_open):
-        """Proceed for all setups, if needed."""
-        abort = await self.setup_swarm(path_to_open)
-        if abort:
-            print("=========== abort!!!!")
-            return
-        await self.setup_nvim(path_to_open)
-
-    async def setup_swarm(self, path_to_open):
-        """Setup the swarm and return if we need to stop the startup process."""
-        if path_to_open is not None:
-            already_handled = await self.swarm.discover(path_to_open)
-            print("=============== AH", repr(already_handled))
-            if already_handled:
-                logger.info("Aborting startup as the path is already open in other Nysor process")
-                return self.close_gui()
-
-        def cb_has_path(path):
-            """Indicate if the given path is opened here."""
-            # FIXME.90: this verification will change when multibuffers
-            is_here = path == self.state_buffer_filepath
-            if is_here:
-                # we have somebody else's path, claim attention!
-                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-                self.show()
-                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
-                self.show()
-            return is_here
-
-        # FIXME
-        self.swarm.listen(cb_has_path)
+    def _path_discover_cb(self, path):
+        """Indicate if the given path is opened here and claim GUI attention if so."""
+        # FIXME.90: this verification will change when multibuffers
+        is_here = path == self.state_buffer_filepath
+        if is_here:
+            # we have somebody else's path, claim attention!
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            self.show()
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
+            self.show()
+        return is_here
 
     async def setup_nvim(self, path_to_open):
         """Set up Neovim from the GUI PoV.
@@ -546,7 +528,7 @@ class MainApp(QMainWindow):
         if self._closing == 0:
             # initiate the process to close; ignore the event so GUI is still alive, but
             # start internal procedures
-            self.swarm.close()
+            self._swarm.close()
             self._closing = 1
             if event is not None:
                 event.ignore()
@@ -703,6 +685,10 @@ def start():
         print("Nysor", get_nysor_version())
         return 0
 
+    path = args.path
+    if path != SPECIAL_STDIN_PATH:
+        path = os.path.realpath(path)
+
     # setup logging and create the app itself
     logsetup(args.loglevel)
     app = qasync.QApplication(sys.argv)
@@ -714,10 +700,21 @@ def start():
     app_close_event = asyncio.Event()
     app.aboutToQuit.connect(app_close_event.set)
 
-    # start and show GUI
-    main_window = MainApp(event_loop, args.path, args.nvim)
-    main_window.show()
+    async def main():
+        """Discover if this process will handle this path and start everything in that case."""
+        nysor_version = get_nysor_version()
+        logger.info("Starting Nysor {}", nysor_version)
+
+        if path != SPECIAL_STDIN_PATH:
+            already_handled = await swarm.discover(event_loop, path)
+            if already_handled:
+                return
+
+        # start and show GUI
+        main_window = MainApp(nysor_version, event_loop, path, args.nvim)
+        main_window.show()
+        await app_close_event.wait()
 
     # go!
     with event_loop:
-        event_loop.run_until_complete(app_close_event.wait())
+        event_loop.run_until_complete(main())
