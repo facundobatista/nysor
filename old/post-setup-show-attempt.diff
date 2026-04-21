@@ -1,0 +1,125 @@
+diff --git a/nysor/main.py b/nysor/main.py
+index 35c54b7..251d3ac 100644
+--- a/nysor/main.py
++++ b/nysor/main.py
+@@ -362,6 +362,9 @@ class MainApp(QMainWindow):
+             dlg.exec()
+             exit(1)
+ 
++        # the setup will happen in the future, but we need to wait for it so all is
++        # in place before actually showing the GUI (*if* we show it)
++        self.setup_done = asyncio.Event()
+         loop.create_task(self.setup_nvim(path_to_open))
+ 
+         # scrollbars
+@@ -408,6 +411,7 @@ class MainApp(QMainWindow):
+         This comes in tandem with the Neovim internal setup, so the first thing we do is to
+         wait that one to finish.
+         """
++        print("========== setup nvim started")
+         await self.nvi.setup_completed_event.wait()
+ 
+         # attach the UI
+@@ -444,6 +448,8 @@ class MainApp(QMainWindow):
+                 await self._feed_neovim_from_stdin()
+             else:
+                 await self._feed_neovim_from_path(path_to_open)
++        print("========== setup nvim done")
++        self.setup_done.set()
+ 
+     async def _feed_neovim_from_stdin(self):
+         """Feed neovim with data read from standard input."""
+@@ -635,6 +641,8 @@ class MainApp(QMainWindow):
+ 
+ def start():
+     """Start the application."""
++    import time
++    tini = time.time()
+     # mutually exclusive verbosity levels
+     parser = argparse.ArgumentParser()
+     loggroup = parser.add_mutually_exclusive_group()
+@@ -666,6 +674,7 @@ def start():
+     if args.version:
+         print("Nysor", get_nysor_version())
+         return 0
++    print("=========== args proc done", time.time() - tini)
+ 
+     # setup logging and create the app itself
+     logsetup(args.loglevel)
+@@ -677,11 +686,17 @@ def start():
+     asyncio.set_event_loop(event_loop)
+     app_close_event = asyncio.Event()
+     app.aboutToQuit.connect(app_close_event.set)
++    print("=========== basic app done", time.time() - tini)
+ 
+     # start and show GUI
+-    main_window = MainApp(event_loop, args.path, args.nvim)
+-    main_window.show()
++    async def main():
++        main_window = MainApp(event_loop, args.path, args.nvim)
++        print("=========== main init done", time.time() - tini)
++        await main_window.setup_done.wait()
++        print("=========== main setup done", time.time() - tini)
++        main_window.show()
++        await app_close_event.wait()
+ 
+     # go!
+     with event_loop:
+-        event_loop.run_until_complete(app_close_event.wait())
++        event_loop.run_until_complete(main())
+diff --git a/nysor/text_display.py b/nysor/text_display.py
+index 6577520..bbc1f7f 100644
+--- a/nysor/text_display.py
++++ b/nysor/text_display.py
+@@ -109,7 +109,7 @@ class BaseDisplay(QWidget):
+     def resizeEvent(self, event: QResizeEvent):
+         """Hook-up in the event to trigger internal resizing."""
+         super().resizeEvent(event)
+-        self.window_resize()
++        self._window_resize()
+ 
+     def keyPressEvent(self, event: QKeyEvent):
+         """Get all keyboard events."""
+@@ -290,6 +290,7 @@ class TextDisplay(BaseDisplay):
+         self.font_size = None
+         self.display_size = (80, 20)
+         self.set_font("Courier", 12)
++        print("========= td font init", self.font)
+ 
+         self.lines = LogicalLines.empty()
+         self.cursor_pos = (0, 0)
+@@ -301,11 +302,22 @@ class TextDisplay(BaseDisplay):
+         # cache to hold mode_info processed structures
+         self.mode_info_structs = {}
+ 
+-    def window_resize(self):
++    def _window_resize(self):
+         """Inform Neovim of new window size."""
+-        cols = max(MIN_COLS_ROWS, int(self.width() / self.font_size.width))
+-        rows = max(MIN_COLS_ROWS, int(self.height() / self.font_size.height))
+-        self.main_window.nvi.future_request("nvim_ui_try_resize", cols, rows)
++        print("========= ======== resize font?", self.font)
++        print("================== cols?", self.width(), self.font_size.width)
++        print("================== rows?", self.height(), self.font_size.height)
++        #cols = max(MIN_COLS_ROWS, int(self.width() / self.font_size.width))
++        #rows = max(MIN_COLS_ROWS, int(self.height() / self.font_size.height))
++        #print("============= cols rows", cols, rows)
++        #self.main_window.nvi.future_request("nvim_ui_try_resize", cols, rows)
++
++        cols = int(self.width() / self.font_size.width)
++        rows = int(self.height() / self.font_size.height)
++        print("============= cols rows", cols, rows)
++        if cols >= MIN_COLS_ROWS and rows >= MIN_COLS_ROWS:
++            print("===================== resize!!")
++            self.main_window.nvi.future_request("nvim_ui_try_resize", cols, rows)
+ 
+     def handle_keyboard(self, key_text, key, modifiers):
+         """Handle keyboard events."""
+@@ -347,6 +359,7 @@ class TextDisplay(BaseDisplay):
+ 
+     def set_font(self, name, size):
+         """Set the font."""
++        print("======== font setting", name, size)
+         # when requesting the font itself, round up the size, as it may not work
+         # properly with non-ints
+         self.font = QFont(name, math.ceil(size))
