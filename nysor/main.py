@@ -428,7 +428,7 @@ class MainApp(QMainWindow):
         await self.nvi.setup_completed_event.wait()
 
         # attach the UI
-        nvim_config = {"ext_linegrid": True}
+        nvim_config = {"ext_linegrid": True, "ext_cmdline": True, "ext_messages": True}
         await self.nvi.call("nvim_ui_attach", 80, 20, nvim_config)
 
         # subscribe to the buffer file change (will comeback as a 'set_buffer_state' call)
@@ -686,7 +686,7 @@ def start():
         return 0
 
     path = args.path
-    if path != SPECIAL_STDIN_PATH:
+    if path not in (SPECIAL_STDIN_PATH, None):
         path = os.path.realpath(path)
 
     # setup logging and create the app itself
@@ -705,7 +705,7 @@ def start():
         nysor_version = get_nysor_version()
         logger.info("Starting Nysor {}", nysor_version)
 
-        if path != SPECIAL_STDIN_PATH:
+        if path not in (SPECIAL_STDIN_PATH, None):
             already_handled = await swarm.discover(event_loop, path)
             if already_handled:
                 return

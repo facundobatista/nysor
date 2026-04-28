@@ -115,6 +115,13 @@ class NvimNotifications:
         """Clear the grid."""
         self.text_display.flush()
 
+    def _n_redraw__grid_destroy(self, args):
+        """Free resources for the given grid as it will not be used anymore."""
+        (grid_id,) = args
+        # receiving this because of external messages; ignore as long is not 1
+        # FIXME.90 confirm this special value ^ and rewrite comment accordingly
+        assert grid_id != 1
+
     def _n_redraw__grid_clear(self, args):
         """Clear the grid."""
         (grid_id,) = args
@@ -232,3 +239,51 @@ class NvimNotifications:
 
         # Note: can't find use to scroll_delta (maybe for smooth scrollbar?)
         call_async(self.main_window.adjust_viewport, topline, botline, line_count, curcol)
+
+    def _n_redraw__cmdline_show(self, args):
+        """Triggered when the cmdline is displayed or changed."""
+        content, pos, firstc, prompt, indent, level = args
+        assert level == 1
+        cmd = " " * indent + firstc + prompt
+        assert set(x[0] for x in content) == {0}
+        cmd += "".join(x[1] for x in content)
+        print("=========== cmdline show", (content, pos, firstc, prompt, cmd))
+
+    def _n_redraw__cmdline_hide(self, args):
+        """Hide the cmdline."""
+        (level,) = args
+        assert level == 1
+        print("============ cmdline hide -- ACA APAGAR LA CMDLINE")
+
+    def _n_redraw__cmdline_pos(self, args):
+        """Change the cursor position in the cmdline."""
+        pos, level = args
+        assert level == 1
+        print("============ cmdline pos -- ACA DIBUJAR EL CURSOR", pos)
+
+    def _n_redraw__cmdline_special_char(self, args):
+        """Change the cursor position in the cmdline."""
+        char, shift, level = args
+        assert level == 1
+        print("============ cmdline special", (char, shift))
+
+    def _n_redraw__msg_show(self, *args):
+        """Display a message to the user."""
+        print("=========== msg show RAW", args)
+        # get first three present in older nvim version, modern ones may have more
+        for kind, content, replace_last, *_ in args:
+            print("======= msg show", repr(kind), content, replace_last)
+
+    def _n_redraw__msg_clear(self, args):
+        """Clear all messages currently displayed by 'msg_show'."""
+        print("======= msg clear")
+
+    def _n_redraw__msg_showcmd(self, args):
+        """Show 'showcmd' messages."""
+        print("======= showmode", args)
+        # FIXME: empty content "hides"
+
+    def _n_redraw__msg_showmode(self, args):
+        """Show 'showmode' and 'recording' messages."""
+        print("======= showmode", args)
+        # FIXME: empty content "hides"

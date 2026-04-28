@@ -62,18 +62,15 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 These are the items lousely grouped to get there:
 
 **For 0.7:**
-- Simplify/optimize the different `_paint_cursor_*`
-    - only have one that receives the precalculated values
-    - the value is calculated once (and cached), not on every call
-    - change that caching!
-- different Nysor runs should be different processes, but aware of them
-    - if you're trying to open the same file twice, it should not, the other editor should get focus
 - try to separate, if possible, the command bar from Neovim's grid itself
     - add better history and ways to search/filter previous commands
 - try to separate, if possible, the windows for messages from the editor
     - not only from the Neovim *itself* (like `myfile.txt 23L, 10023B written`) but also from plugins, like linters
     - these windows should be easily resizeable, and with buttons somewhere to turn them on/off
     - have a pane specifically for "errors"? (what today is a pop-up)
+
+https://neovim.io/doc/user/api-ui-events/#ui-cmdline
+https://neovim.io/doc/user/api-ui-events/#ui-messages
 
 
 **For 1.0:**
