@@ -248,39 +248,44 @@ class NvimNotifications:
         assert set(x[0] for x in content) == {0}
         cmd += "".join(x[1] for x in content)
         print("=========== cmdline show", (content, pos, firstc, prompt, cmd))
+        self.main_window.command_line.set_text(cmd)
 
     def _n_redraw__cmdline_hide(self, args):
         """Hide the cmdline."""
         (level,) = args
         assert level == 1
-        print("============ cmdline hide -- ACA APAGAR LA CMDLINE")
+        print("============ cmdline hide")
+        self.main_window.command_line.clear()
 
     def _n_redraw__cmdline_pos(self, args):
         """Change the cursor position in the cmdline."""
         pos, level = args
         assert level == 1
-        print("============ cmdline pos -- ACA DIBUJAR EL CURSOR", pos)
+        print("============ cmdline pos", pos)
+        self.main_window.command_line.set_cursor_position(pos)
 
     def _n_redraw__cmdline_special_char(self, args):
         """Change the cursor position in the cmdline."""
         char, shift, level = args
         assert level == 1
-        print("============ cmdline special", (char, shift))
+        print("============ cmdline special -- FIXME", (char, shift))
 
     def _n_redraw__msg_show(self, *args):
         """Display a message to the user."""
-        print("=========== msg show RAW", args)
         # get first three present in older nvim version, modern ones may have more
         for kind, content, replace_last, *_ in args:
             print("======= msg show", repr(kind), content, replace_last)
+            raw_content = "".join(x[1] for x in content)
+            self.main_window.messages_view.add_line(raw_content, replace_last)
 
     def _n_redraw__msg_clear(self, args):
         """Clear all messages currently displayed by 'msg_show'."""
         print("======= msg clear")
+        self.main_window.messages_view.clear()
 
     def _n_redraw__msg_showcmd(self, args):
         """Show 'showcmd' messages."""
-        print("======= showmode", args)
+        print("======= showcmd", args)
         # FIXME: empty content "hides"
 
     def _n_redraw__msg_showmode(self, args):

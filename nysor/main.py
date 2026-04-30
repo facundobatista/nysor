@@ -39,6 +39,7 @@ from nysor import swarm
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications
+from nysor.command_line import LineView, MessagesView
 from nysor.text_display import TextDisplay
 
 logger = logging.getLogger(__name__)
@@ -395,6 +396,18 @@ class MainApp(QMainWindow):
 
         # rest of vertical widgets
         self.main_layout.addWidget(self.h_scroll)
+
+        self.messages_view = MessagesView(self)
+        self.main_layout.addWidget(self.messages_view)
+
+        line_views_layout = QHBoxLayout()
+        self.command_line = LineView(self)
+        self.lv2 = LineView(self)
+        self.lv3 = LineView(self)
+        line_views_layout.addWidget(self.command_line, stretch=3)
+        line_views_layout.addWidget(self.lv2, stretch=1)
+        line_views_layout.addWidget(self.lv3, stretch=1)
+        self.main_layout.addLayout(line_views_layout)
 
     def set_buffer_state(self, is_modified=None, filepath=None):
         """Set the state state."""
