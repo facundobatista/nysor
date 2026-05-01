@@ -73,6 +73,11 @@ https://neovim.io/doc/user/api-ui-events/#ui-cmdline
 https://neovim.io/doc/user/api-ui-events/#ui-messages
 
 
+**For 0.8:**
+- allow double-level logging (user selected to terminal, debug to a file if configured)
+
+
+
 **For 1.0:**
 
 - Think about "distribution"

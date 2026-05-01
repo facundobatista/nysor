@@ -31,24 +31,44 @@ class MessagesView(QTextEdit):
             self._current_text_lines.append(line)
         self._set_text("\n".join(self._current_text_lines))
 
-    def _set_text(self, text):  # FIXME: recibir lineas, no el bloque entero
-        """Set the text content, adjusting height based on line count."""
-        self.setPlainText(text)
-        self.show()
-
-        line_count = text.count('\n') + 1
+    def _update_height(self):
+        """Recalculate and apply fixed height based on current content and viewport width."""
+        line_count = len(self._current_text_lines) or 1
         visible_lines = min(line_count, 5)
 
         line_height = self.fontMetrics().lineSpacing()
         doc_margin = int(self.document().documentMargin())
         frame_width = self.frameWidth()
-        height = visible_lines * line_height + 2 * doc_margin + 2 * frame_width
-        self.setFixedHeight(height)
+
+        viewport_width = self.viewport().width()
+        needs_h_scroll = viewport_width > 0 and self.document().idealWidth() > viewport_width
+        scrollbar_height = self.horizontalScrollBar().sizeHint().height() if needs_h_scroll else 0
+
+        new_height = (
+            visible_lines * line_height +
+            2 * doc_margin +
+            2 * frame_width +
+            scrollbar_height
+        )
+        if self.maximumHeight() != new_height:
+            self.setFixedHeight(new_height)
 
         if line_count > 5:
             self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         else:
             self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+    def resizeEvent(self, event):
+        """Recalculate height on resize, in case horizontal scrollbar need changes."""
+        super().resizeEvent(event)
+        if self._current_text_lines:
+            self._update_height()
+
+    def _set_text(self, text):  # FIXME: recibir lineas, no el bloque entero
+        """Set the text content, adjusting height based on line count."""
+        self.setPlainText(text)
+        self.show()
+        self._update_height()
 
     def clear(self):
         """Clear content and hide the widget."""

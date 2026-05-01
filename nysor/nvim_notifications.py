@@ -285,10 +285,11 @@ class NvimNotifications:
 
     def _n_redraw__msg_showcmd(self, args):
         """Show 'showcmd' messages."""
-        print("======= showcmd", args)
-        # FIXME: empty content "hides"
+        return self._n_redraw__msg_showmode(args)
 
     def _n_redraw__msg_showmode(self, args):
         """Show 'showmode' and 'recording' messages."""
-        print("======= showmode", args)
-        # FIXME: empty content "hides"
+        (content,) = args
+        print("======= show mode/cmd", content)
+        raw_content = "".join(x[1] for x in content)
+        self.main_window.mode_view.set_text(raw_content)

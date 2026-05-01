@@ -402,11 +402,9 @@ class MainApp(QMainWindow):
 
         line_views_layout = QHBoxLayout()
         self.command_line = LineView(self)
-        self.lv2 = LineView(self)
-        self.lv3 = LineView(self)
-        line_views_layout.addWidget(self.command_line, stretch=3)
-        line_views_layout.addWidget(self.lv2, stretch=1)
-        line_views_layout.addWidget(self.lv3, stretch=1)
+        self.mode_view = LineView(self)
+        line_views_layout.addWidget(self.command_line, stretch=4)
+        line_views_layout.addWidget(self.mode_view, stretch=1)
         self.main_layout.addLayout(line_views_layout)
 
     def set_buffer_state(self, is_modified=None, filepath=None):
