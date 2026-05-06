@@ -74,7 +74,9 @@ https://neovim.io/doc/user/api-ui-events/#ui-messages
 
 
 **For 0.8:**
+- get Windows back
 - allow double-level logging (user selected to terminal, debug to a file if configured)
+- FIXME.94 allow logging system to use `logger.trace`
 
 
 

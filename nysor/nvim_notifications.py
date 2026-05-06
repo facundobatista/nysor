@@ -75,7 +75,11 @@ class NvimNotifications:
                 )
             else:
                 try:
-                    logger.debug("[NvimNotifications] Handle 'redraw': {} - {}", submethod, args)
+                    # FIXME.94 allow logging system to use `logger.trace`
+                    logger.log(
+                        logging.TRACE,
+                        "[NvimNotifications] Handle 'redraw': {} - {}", submethod, args
+                    )
                     n_meth(*args)
                 except Exception:
                     logger.exception("Crash when calling {!r} with {!r}", n_name, args)
@@ -112,7 +116,7 @@ class NvimNotifications:
         self.dyncache.clean("default_colors")
 
     def _n_redraw__flush(self, _):
-        """Clear the grid."""
+        """Flush all changes to the grid."""
         self.text_display.flush()
 
     def _n_redraw__grid_destroy(self, args):
@@ -242,19 +246,29 @@ class NvimNotifications:
 
     def _n_redraw__cmdline_show(self, args):
         """Triggered when the cmdline is displayed or changed."""
-        content, pos, firstc, prompt, indent, level = args
+        content, pos, firstc, prompt, indent, level, *rest = args
+        if rest:
+            # new API
+            (hl_id,) = rest
+        else:
+            hl_id = None
         assert level == 1
         cmd = " " * indent + firstc + prompt
         assert set(x[0] for x in content) == {0}
         cmd += "".join(x[1] for x in content)
-        print("=========== cmdline show", (content, pos, firstc, prompt, cmd))
+        print("=========== cmdline show", (content, pos, firstc, prompt, cmd, hl_id))
         self.main_window.command_line.set_text(cmd)
 
     def _n_redraw__cmdline_hide(self, args):
         """Hide the cmdline."""
-        (level,) = args
+        level, *rest = args
+        if rest:
+            # new API
+            (abort,) = rest
+        else:
+            abort = None
         assert level == 1
-        print("============ cmdline hide")
+        print("============ cmdline hide", abort)
         self.main_window.command_line.clear()
 
     def _n_redraw__cmdline_pos(self, args):
@@ -276,7 +290,10 @@ class NvimNotifications:
         for kind, content, replace_last, *_ in args:
             print("======= msg show", repr(kind), content, replace_last)
             raw_content = "".join(x[1] for x in content)
-            self.main_window.messages_view.add_line(raw_content, replace_last)
+            if kind == "empty":
+                self.main_window.messages_view.clear()
+            else:
+                self.main_window.messages_view.add_line(raw_content, replace_last)
 
     def _n_redraw__msg_clear(self, args):
         """Clear all messages currently displayed by 'msg_show'."""

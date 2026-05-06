@@ -155,8 +155,8 @@ class NvimInterface:
         self._neovim_being_quited = True
         await self._request(None, eback, "nvim_command", "quit")
 
-        # sometimes the quit command needs an extra Enter, so send it!
-        await self._request(None, None, "nvim_input", "\r")
+        ## sometimes the quit command needs an extra Enter, so send it!
+        #await self._request(None, None, "nvim_input", "\r")
 
         await self._quit_processed.wait()
         self._neovim_being_quited = False
@@ -189,6 +189,7 @@ class NvimInterface:
 
     def future_request(self, method, *params):
         """Send a request in the future; response/error, if any, will be discarded."""
+        print("============= fut req!", method, params)
         self._loop.create_task(self._request(None, None, method, *params))
 
     async def _request(self, callback, errback, method, *params):
@@ -247,7 +248,7 @@ class NvimInterface:
 
         # really read
         return_code = self._proc.poll()
-        logger.debug("Reading response; rc {}", return_code)
+        trace("Reading response; rc {}", return_code)
 
         for msgtype, *rest in self._read_messages():
             if msgtype == 1:

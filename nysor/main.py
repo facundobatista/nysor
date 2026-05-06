@@ -506,6 +506,15 @@ class MainApp(QMainWindow):
         logger.debug("Start shutdown, asking")
         error = await self.nvi.quit()
         if error:
+            print("===================== ERROR FIXME")
+            #self._closing = 0  # reset
+            #await asyncio.sleep(5)
+            #import time
+            #time.sleep(5)
+            #print("===================== ERROR FIXME 2")
+            #return
+            # aca tenemso que hacer que esto nunca reciba error, a lo sumo un "proceed", el error
+            # debería mostrarse en el panelcio???
             dlg = QMessageBox(self)
             dlg.setIcon(QMessageBox.Icon.Warning)
             dlg.setWindowTitle("Neovim Error")
