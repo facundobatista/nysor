@@ -149,14 +149,15 @@ class NvimInterface:
             holder[0] = message
             self._quit_processed.set()
 
+        # before telling Neovim to quit we need to exit insert mode, if there; simplest way is
+        # just send ESC
+        await self._request(None, None, "nvim_input", "<Esc>")
+
         # this is a weird request; if all continues OK, Neovim will quit and a possible callback
         # is never called; however if there's a situation and Neovim can't quit, the errback
         # will be called
         self._neovim_being_quited = True
         await self._request(None, eback, "nvim_command", "quit")
-
-        # sometimes the quit command needs an extra Enter, so send it!
-        await self._request(None, None, "nvim_input", "\r")
 
         await self._quit_processed.wait()
         self._neovim_being_quited = False
@@ -247,7 +248,7 @@ class NvimInterface:
 
         # really read
         return_code = self._proc.poll()
-        logger.debug("Reading response; rc {}", return_code)
+        trace("Reading response; rc {}", return_code)
 
         for msgtype, *rest in self._read_messages():
             if msgtype == 1:

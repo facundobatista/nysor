@@ -75,7 +75,11 @@ class NvimNotifications:
                 )
             else:
                 try:
-                    logger.debug("[NvimNotifications] Handle 'redraw': {} - {}", submethod, args)
+                    # FIXME.94 allow logging system to use `logger.trace`
+                    logger.log(
+                        logging.TRACE,
+                        "[NvimNotifications] Handle 'redraw': {} - {}", submethod, args
+                    )
                     n_meth(*args)
                 except Exception:
                     logger.exception("Crash when calling {!r} with {!r}", n_name, args)
@@ -112,7 +116,7 @@ class NvimNotifications:
         self.dyncache.clean("default_colors")
 
     def _n_redraw__flush(self, _):
-        """Clear the grid."""
+        """Flush all changes to the grid."""
         self.text_display.flush()
 
     def _n_redraw__grid_clear(self, args):
@@ -144,6 +148,7 @@ class NvimNotifications:
 
     def _n_redraw__grid_scroll(self, args):
         """Scroll a grid."""
+        print("=========== gs raw", args)
         grid_id, top, bottom, left, right, rows, cols = args
         assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.scroll((top, bottom, rows), (left, right, cols))

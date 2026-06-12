@@ -492,7 +492,7 @@ class MainApp(QMainWindow):
 
     async def _quit(self):
         """Close the GUI after Neovim is down."""
-        logger.debug("Start shutdown, asking")
+        logger.debug("Start shutdown, asking Neovim to quit")
         error = await self.nvi.quit()
         if error:
             dlg = QMessageBox(self)
@@ -500,7 +500,13 @@ class MainApp(QMainWindow):
             dlg.setWindowTitle("Neovim Error")
             dlg.setText(error)
             dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
-            dlg.exec()
+
+            # wait asyncly for the dialog to be closed
+            closed = asyncio.Event()
+            dlg.finished.connect(lambda _result: closed.set())
+            dlg.open()
+            await closed.wait()
+
             self._closing = 0  # reset
             return
 
@@ -686,7 +692,7 @@ def start():
         return 0
 
     path = args.path
-    if path != SPECIAL_STDIN_PATH:
+    if path not in (SPECIAL_STDIN_PATH, None):
         path = os.path.realpath(path)
 
     # setup logging and create the app itself
@@ -705,7 +711,7 @@ def start():
         nysor_version = get_nysor_version()
         logger.info("Starting Nysor {}", nysor_version)
 
-        if path != SPECIAL_STDIN_PATH:
+        if path not in (SPECIAL_STDIN_PATH, None):
             already_handled = await swarm.discover(event_loop, path)
             if already_handled:
                 return
