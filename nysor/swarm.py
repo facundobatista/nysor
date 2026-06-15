@@ -7,6 +7,8 @@
 import asyncio
 import logging
 import os
+import socket
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +80,22 @@ class SwarmServer:
     async def _listen(self, path_finder_callback):
         """Really listen other Nysors, answer back if we have this path."""
         pid = os.getpid()
+
+        # build the socket by hand to enable port reuse across platforms: several Nysor instances
+        # on the same machine must bind the same discovery port. On Unix that's SO_REUSEPORT; on
+        # Windows the equivalent multi-bind semantics live in SO_REUSEADDR (Windows lacks
+        # SO_REUSEPORT, so asyncio's reuse_port would raise)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        if sys.platform == "win32":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        sock.bind(("0.0.0.0", DISCOVERY_PORT))
+
         transport, protocol = await self.loop.create_datagram_endpoint(
             lambda: ListenerProtocol(path_finder_callback, pid),
-            local_addr=("0.0.0.0", DISCOVERY_PORT),
-            allow_broadcast=True,
-            reuse_port=True,
+            sock=sock,
         )
 
         try:

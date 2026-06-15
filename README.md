@@ -128,3 +128,10 @@ The path after that is less descriptive. The following are the big items I want 
 
 **For version 6:**
 - incorporate the possibility of AIs to read/write code
+
+
+# Development
+
+set SETUPTOOLS_SCM_PRETEND_VERSION=0.0.0
+
+

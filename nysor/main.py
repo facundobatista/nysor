@@ -699,8 +699,10 @@ def start():
     logsetup(args.loglevel)
     app = qasync.QApplication(sys.argv)
 
-    # connect with async's event loop
-    event_loop = qasync.QEventLoop(app)
+    # connect with async's event loop; we explicitly use the selector loop (not qasync's
+    # platform default) because on Windows the default is the IOCP/Proactor loop, which does
+    # not support add_reader(), the mechanism we use to read from the Neovim socket
+    event_loop = qasync.QSelectorEventLoop(app)
     event_loop.set_debug(True)
     asyncio.set_event_loop(event_loop)
     app_close_event = asyncio.Event()
