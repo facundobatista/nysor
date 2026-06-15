@@ -6,11 +6,9 @@
 
 import asyncio
 import logging
-import os
 import subprocess
 import socket
 import time
-import uuid
 
 import msgpack
 
@@ -19,6 +17,9 @@ POLL_FREEZE_PERIOD = 0.005
 
 # some Neovim translation constants; this is filled by the API info
 _EXT_TYPE_CODES = {}
+
+# where to communicate with nvim
+NVIM_TCP_HOST = "127.0.0.1"
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ def ext_hook(code, data):
 
 
 class NvimInterface:
-    """Interface with a Neovim process through RPC on a file socket."""
+    """Interface with a Neovim process through RPC on a TCP socket."""
 
     def __init__(self, nvim_exec_path, loop, notification_handler, quit_callback):
         self._loop = loop
@@ -65,30 +66,37 @@ class NvimInterface:
         self._neovim_already_finished = False
         self._neovim_being_quited = False
 
-        _sock_path = self._get_unique_sock_path()
-        logger.info("Starting Neovim process, communicating through {!r}", _sock_path)
+        port = self._get_free_port()
+        listen_addr = f"{NVIM_TCP_HOST}:{port}"
+        logger.info("Starting Neovim process, communicating through {}", listen_addr)
         if nvim_exec_path is None:
             nvim_exec_path = "nvim"
         try:
-            self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", _sock_path])
+            self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", listen_addr])
         except FileNotFoundError as exc:
             logger.error("File not found when trying to run nvim: {!r}", exc)
             raise NeovimExecutableNotFound()
 
+        # connect to the Neovim process, retrying until it's listening; we use TCP on localhost
+        # (instead of a filesystem socket) so this works the same on Linux and Windows
         tini = time.time()
         while True:
-            if os.path.exists(_sock_path):
+            self._client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                self._client.connect((NVIM_TCP_HOST, port))
+            except OSError:
+                # nvim is not listening yet; drop this socket and retry with a fresh one
+                self._client.close()
+                logger.debug("Wait nvim process to start")
+                # yes, we block; if we want to go fully async here we need to find out a better
+                # way to ensure that nvim is really up
+                time.sleep(.05)
+            else:
                 break
-            logger.debug("Wait nvim process to start")
-            # yes, we block; if we want to go fully async here we need to find out a better
-            # way to ensure that nvim is really up
-            time.sleep(.05)
         tdelta = time.time() - tini
         logger.debug("Neovim process started! it took {:d} ms", int(tdelta / 1000))
 
-        self._client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self._client.setblocking(False)
-        self._client.connect(_sock_path)
         self._loop.add_reader(self._client, self._receive_responses)
         logger.info("Neovim connection done")
 
@@ -120,15 +128,15 @@ class NvimInterface:
         logger.info("Neovim API info: version {}", self.nvim_version)
         self.setup_completed_event.set()
 
-    def _get_unique_sock_path(self):
-        """Return an unique path, validating it's not in disk."""
-        while True:
-            uniqueid = uuid.uuid4().hex
-            path = f"/tmp/nysor-subnvim-{uniqueid}.s"
-            if os.path.exists(path):
-                logger.warning("Found an unique path already in disk: {!r}", path)
-            else:
-                return path
+    def _get_free_port(self):
+        """Return a free TCP port on localhost.
+
+        There is a small race window between closing the probe socket and Neovim binding the
+        port, but it's acceptable for a local subprocess.
+        """
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            return probe.getsockname()[1]
 
     async def quit(self):
         """Finish neovim and close the process.
