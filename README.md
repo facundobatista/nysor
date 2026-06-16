@@ -14,7 +14,7 @@ Pronounced similar to "organizer", but without the "orga" and changing the "e" f
 It's basically a pet project: one aimed to learn about Neovim and how to use it programmatically. But at the same time the idea is to provide a high quality interface for the everyday usage.
 
 
-# What it offers?
+# What does it offer?
 
 Nysor is mainly a GUI with an editor inside. You run it, optionally indicating a file to load, and will edit it using Neovim as backend.
 
@@ -27,6 +27,7 @@ Currently, version 0.1, it's just a window with the editor inside. There is noth
   <p><em>Default init message (the clear background is because of my Neovim config, not a GUI decision)</em></p>
 </div>
 
+
 ## How to run it?
 
 You call it from the project (no packaging yet), but previously you need to create a virtualenv; e.g.:
@@ -38,7 +39,7 @@ You call it from the project (no packaging yet), but previously you need to crea
 (env) …/nysor$ python -m nysor
 ```
 
-It should work just fine in Linux and MacOS. If you want for it to run in Windows, me too, but I lack for a testing environment, *let's talk*.
+It should work just fine in Linux and MacOS. See below for Windows.
 
 You can indicate it to open a file to edit:
 ```
@@ -62,10 +63,8 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 These are the items lousely grouped to get there:
 
 **For 0.7:**
-- get Windows back
 - allow double-level logging (user selected to terminal, debug to a file if configured)
 - FIXME.94 allow logging system to use `logger.trace`
-
 
 
 **For 1.0:**
@@ -128,3 +127,13 @@ The path after that is less descriptive. The following are the big items I want 
 
 **For version 6:**
 - incorporate the possibility of AIs to read/write code
+
+
+# What about Windows?
+
+Windows is tricky. I want Nysor to run in Windows, but it's not my main platform, and I don't enjoy overcoming the the issues there.
+
+We would need a champion to take the project there. Somebody that would want for Nysor to work in Windows and push it to make it possible. Are you that person? *Let's talk*.
+
+I started [this branch](https://github.com/facundobatista/nysor/tree/get-win-back) that solves the network/process details of running Neovim in Windows, but there are other glitches that need to be understood and fixed. Check that out, and send me a message if you are interested in this. Thanks in advance!
+
