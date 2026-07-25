@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollBar,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -337,7 +338,7 @@ class MainMenu:
 class MainApp(QMainWindow):
     """The main application window."""
 
-    def __init__(self, version, loop, path_to_open, nvim_exec_path):
+    def __init__(self, version, loop, paths_to_open, nvim_exec_path):
         super().__init__()
         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
         self._menu = MainMenu(self)
@@ -366,7 +367,7 @@ class MainApp(QMainWindow):
             exit(1)
 
         self._swarm = swarm.SwarmServer(loop, self._path_discover_cb)
-        loop.create_task(self.setup_nvim(path_to_open))
+        loop.create_task(self.setup_nvim(paths_to_open))
 
         # scrollbars
         self.v_scroll = QScrollBar(Qt.Orientation.Vertical)
@@ -385,16 +386,29 @@ class MainApp(QMainWindow):
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
 
+        # the editing views live under a tab system; for now there is a single tab, but this
+        # is the foundation for multibuffer editing (FIXME.90)
+        self.tabs = QTabWidget()
+        self.main_layout.addWidget(self.tabs)
+
+        # the editing view itself: the text display plus its scroll bars, wrapped in a
+        # container widget so it can be held as a tab page
+        self.text_display = self.nvim_notifs.text_display = TextDisplay(self)
+
+        editor_widget = QWidget()
+        editor_layout = QVBoxLayout(editor_widget)
+
         # horizontal layout for text display and vertical scroll bar
         hbox = QHBoxLayout()
-        self.text_display = self.nvim_notifs.text_display = TextDisplay(self)
-        self.text_display.setFocus()
         hbox.addWidget(self.text_display, stretch=1)
         hbox.addWidget(self.v_scroll)
-        self.main_layout.addLayout(hbox)
+        editor_layout.addLayout(hbox)
 
         # rest of vertical widgets
-        self.main_layout.addWidget(self.h_scroll)
+        editor_layout.addWidget(self.h_scroll)
+
+        self.tabs.addTab(editor_widget, "[No Name]")
+        self.text_display.setFocus()
 
     def set_buffer_state(self, is_modified=None, filepath=None):
         """Set the state state."""
@@ -406,6 +420,8 @@ class MainApp(QMainWindow):
             self._menu.actions["file__open"].setEnabled(not is_modified)
         if filepath is not None:
             self.state_buffer_filepath = filepath
+            label = os.path.basename(filepath) if filepath else "[No Name]"
+            self.tabs.setTabText(0, label)
 
     def _path_discover_cb(self, path):
         """Indicate if the given path is opened here and claim GUI attention if so."""
@@ -419,7 +435,7 @@ class MainApp(QMainWindow):
             self.show()
         return is_here
 
-    async def setup_nvim(self, path_to_open):
+    async def setup_nvim(self, paths_to_open):
         """Set up Neovim from the GUI PoV.
 
         This comes in tandem with the Neovim internal setup, so the first thing we do is to
@@ -430,6 +446,10 @@ class MainApp(QMainWindow):
         # attach the UI
         nvim_config = {"ext_linegrid": True}
         await self.nvi.call("nvim_ui_attach", 80, 20, nvim_config)
+
+        # the tab(s) are rendered by Qt, so Neovim must never use the top grid line for its
+        # own tabline
+        await self.nvi.call("nvim_set_option_value", "showtabline", 0, {})
 
         # subscribe to the buffer file change (will comeback as a 'set_buffer_state' call)
         # FIXME.90 -- this needs to evolve to multibuffers
@@ -456,11 +476,12 @@ class MainApp(QMainWindow):
         self.set_buffer_state(is_modified=False)  # initially it's always not modified
 
         # if a source is indicated, open it, differentiating if it's a file or standard input
-        if path_to_open is not None:
-            if path_to_open == "-":
-                await self._feed_neovim_from_stdin()
-            else:
-                await self._feed_neovim_from_path(path_to_open)
+        if paths_to_open == SPECIAL_STDIN_PATH:
+            await self._feed_neovim_from_stdin()
+        else:
+            for path in paths_to_open:
+                print("========== op", repr(path))
+                await self._feed_neovim_from_path(path)
 
     async def _feed_neovim_from_stdin(self):
         """Feed neovim with data read from standard input."""
@@ -680,8 +701,12 @@ def start():
         help="Show Nysor version and quit.",
     )
     parser.add_argument(
-        "path", action="store", nargs="?", default=None,
-        help="Path to the file to edit or directory to open (optional)"
+        "path", action="store", nargs="*", default=None,
+        help=(
+            "Path to the file to edit or directory to open. It's optional, and can be indicated "
+            "multiple times. Special value '-' can be passed to open 'standard input', but cannot "
+            "be mixed with other regular paths."
+        )
     )
 
     # parse arguments
@@ -691,9 +716,14 @@ def start():
         print("Nysor", get_nysor_version())
         return 0
 
-    path = args.path
-    if path not in (SPECIAL_STDIN_PATH, None):
-        path = os.path.realpath(path)
+    if SPECIAL_STDIN_PATH in args.path:
+        if len(args.path) == 1:
+            # succesful case of including the stdin path
+            requested_paths = SPECIAL_STDIN_PATH
+        else:
+            raise ValueError("Cannot specify special '-' among other paths")
+    else:
+        requested_paths = [os.path.realpath(path) for path in args.path]
 
     # setup logging and create the app itself
     logsetup(args.loglevel)
@@ -711,13 +741,14 @@ def start():
         nysor_version = get_nysor_version()
         logger.info("Starting Nysor {}", nysor_version)
 
-        if path not in (SPECIAL_STDIN_PATH, None):
-            already_handled = await swarm.discover(event_loop, path)
-            if already_handled:
-                return
+        # FIXME: enable multiple paths!
+        #if path not in (SPECIAL_STDIN_PATH, None):
+        #    already_handled = await swarm.discover(event_loop, path)
+        #    if already_handled:
+        #        return
 
         # start and show GUI
-        main_window = MainApp(nysor_version, event_loop, path, args.nvim)
+        main_window = MainApp(nysor_version, event_loop, requested_paths, args.nvim)
         main_window.show()
         await app_close_event.wait()
 

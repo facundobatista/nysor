@@ -148,7 +148,6 @@ class NvimNotifications:
 
     def _n_redraw__grid_scroll(self, args):
         """Scroll a grid."""
-        print("=========== gs raw", args)
         grid_id, top, bottom, left, right, rows, cols = args
         assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
         self.text_display.scroll((top, bottom, rows), (left, right, cols))

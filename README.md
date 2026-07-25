@@ -131,9 +131,9 @@ The path after that is less descriptive. The following are the big items I want 
 
 # What about Windows?
 
-Windows is tricky. I want Nysor to run in Windows, but it's not my main platform, and I don't enjoy overcoming the the issues there.
+Windows is tricky. I want Nysor to run in Windows, but it's not my main platform, and I don't enjoy overcoming the issues there.
 
-We would need a champion to take the project there. Somebody that would want for Nysor to work in Windows and push it to make it possible. Are you that person? *Let's talk*.
+We would need a champion to take the project in that platform. Somebody that would want for Nysor to work in Windows and push it to make it possible. Are you that person? *Let's talk*.
 
-I started [this branch](https://github.com/facundobatista/nysor/tree/get-win-back) that solves the network/process details of running Neovim in Windows, but there are other glitches that need to be understood and fixed. Check that out, and send me a message if you are interested in this. Thanks in advance!
+I started [this branch](https://github.com/facundobatista/nysor/tree/get-win-back) that solves the network/process details of running Neovim in Windows, but there are other glitches that need to be understood and fixed. Check that out, and send me a message if you are interested in this endeavour. Thanks in advance!
 
