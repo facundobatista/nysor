@@ -355,10 +355,10 @@ class TestNvimInterfaceQuit:
 
         msgid1, method1, params1 = await mock.recv_request()
         msgid2, method2, params2 = await mock.recv_request()
-        assert method1 == "nvim_command"
-        assert params1 == ["quit"]
-        assert method2 == "nvim_input"
-        assert params2 == ["\r"]
+        assert method1 == "nvim_input"
+        assert params1 == ["<Esc>"]
+        assert method2 == "nvim_command"
+        assert params2 == ["quit"]
 
         mock.exit(0)
         interface._receive_responses()
@@ -370,8 +370,8 @@ class TestNvimInterfaceQuit:
         interface, mock = nvim
         quit_task = asyncio.create_task(interface.quit())
 
+        await mock.recv_request()                # nvim_input <Esc>
         msgid, _, _ = await mock.recv_request()  # nvim_command quit
-        await mock.recv_request()                 # nvim_input \r
         await mock.send_response(msgid, error=[0, "E37: No write since last change"])
         await asyncio.sleep(0)
         result = await quit_task

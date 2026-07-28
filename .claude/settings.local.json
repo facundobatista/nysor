@@ -7,7 +7,16 @@
       "Bash(pytest tests/ --timeout=10 2>&1)",
       "Bash(pytest tests/test_nvim_notifications.py -v --timeout=10 2>&1)",
       "Bash(python -m py_compile nysor/main.py)",
-      "Bash(python3 -m py_compile nysor/main.py)"
+      "Bash(python3 -m py_compile nysor/main.py)",
+      "Read(//home/facundo/sistema/**)",
+      "Read(//usr/share/nvim/runtime/doc/**)",
+      "Bash(python -m pytest tests/ -q)",
+      "Bash(python3 -m pytest tests/ -q)",
+      "Bash(env/bin/python -m pytest tests/ -q)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ codespell nysor tests docs)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ ruff check -q)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ ruff check)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ ruff check --output-format=concise)"
     ]
   }
 }

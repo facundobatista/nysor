@@ -90,13 +90,19 @@ MouseButton = Qt.MouseButton
 class BaseDisplay(QWidget):
     """Base widget to isolate as much as possible Qt itself from the Text handling."""
 
-    def __init__(self):
+    def __init__(self, interactive=True):
         super().__init__()
         self.widget_size = QSize(100, 100)  # default valid pseudo-useful value
-        self.setMouseTracking(True)
 
-        # get *all* keyboard events in this widget
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # a display-only widget (e.g. the message strip) does not take focus, does not
+        # forward keyboard/mouse to Neovim, and does not drive Neovim resizing
+        self._interactive = interactive
+        if interactive:
+            self.setMouseTracking(True)
+            # get *all* keyboard events in this widget
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        else:
+            self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def focusNextPrevChild(self, _):
         """Do not allow to "navigate" widgets out of here."""
@@ -109,10 +115,13 @@ class BaseDisplay(QWidget):
     def resizeEvent(self, event: QResizeEvent):
         """Hook-up in the event to trigger internal resizing."""
         super().resizeEvent(event)
-        self.window_resize()
+        if self._interactive:
+            self.window_resize()
 
     def keyPressEvent(self, event: QKeyEvent):
         """Get all keyboard events."""
+        if not self._interactive:
+            return
         key_text = event.text()
         key = event.key()
         modifiers = event.modifiers()
@@ -155,6 +164,9 @@ class BaseDisplay(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent):
         """Handle a button mouse that was pressed."""
+        if not self._interactive:
+            return
+        # C? Por qué necesitamos esto si no tenemos mouse tracking? lo mismo en otras funciones acá abajo y en el del teclado arriba
         button = event.button()
 
         if button is MouseButton.RightButton:
@@ -179,6 +191,8 @@ class BaseDisplay(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         """Handle a button mouse that was released."""
+        if not self._interactive:
+            return
         button = event.button()
         if button is MouseButton.RightButton:
             self.main_window.present_context_window()
@@ -206,6 +220,8 @@ class BaseDisplay(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent):
         """Handle when the mouse is moving; we only care about this for left button dragging."""
+        if not self._interactive:
+            return
         button = event.buttons()
         if button in (MouseButton.NoButton, MouseButton.RightButton, MouseButton.MiddleButton):
             # ignore the event if not dragging with left button
@@ -233,6 +249,8 @@ class BaseDisplay(QWidget):
         not to be "too nervous". Note that typical wheel of standard mouses will
         inform a delta of 120.
         """
+        if not self._interactive:
+            return
         button_name = "wheel"
         qpoint = event.angleDelta()
         dx, dy = qpoint.x(), qpoint.y()
@@ -281,8 +299,8 @@ class TextDisplay(BaseDisplay):
     # cache to hold chars drawing widths; cleaned when font changes
     _char_drawing_widths_cache = {}
 
-    def __init__(self, main_window):
-        super().__init__()
+    def __init__(self, main_window, interactive=True):
+        super().__init__(interactive=interactive)
         self.main_window = main_window
         self.initial_resizing_done = False
 

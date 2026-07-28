@@ -259,7 +259,8 @@ class NvimInterface:
 
                 if error is not None:
                     logger.error("Error from Neovim: {!r}", error)
-                    errback(error[1])
+                    if errback is not None:
+                        errback(error[1])
                 if callback is not None:
                     callback(result)
 

@@ -88,6 +88,7 @@ The path after that is less descriptive. The following are the big items I want 
     - switch back and forward clicking on tabs
     - when going back to a tab, it should check if underneath file changed
     - support closing properly, each tab or the whole program, asking for the buffers that are not properly saved
+    - restore "remote check"
 - split command bar / messages
     - try to separate, if possible, the command bar from Neovim's grid itself
         - add better history and ways to search/filter previous commands

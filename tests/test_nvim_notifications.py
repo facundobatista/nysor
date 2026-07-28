@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from nysor import nvim_notifications
-from nysor.nvim_notifications import DynamicCache, NvimNotifications
+from nysor.nvim_notifications import DynamicCache, GridRegistry, NvimNotifications
 
 
 @pytest.fixture
@@ -139,36 +139,41 @@ class TestNvimNotificationsRedrawHandlers:
         notif.text_display.flush.assert_called_once()
 
     def test_grid_clear(self, notif):
-        """Calls text_display.clear()."""
-        notif._n_redraw__grid_clear([1])
+        """A window grid routes clear() to the editor display."""
+        notif._n_redraw__grid_clear([2])
         notif.text_display.clear.assert_called_once()
 
+    def test_grid_clear_global_grid_is_ignored(self, notif):
+        """The global grid (1) is never rendered, so clear() is not called."""
+        notif._n_redraw__grid_clear([1])
+        notif.text_display.clear.assert_not_called()
+
     def test_grid_cursor_goto(self, notif):
-        """Calls text_display.set_cursor(row, col)."""
-        notif._n_redraw__grid_cursor_goto([1, 5, 10])
+        """A window grid routes set_cursor(row, col) to the editor display."""
+        notif._n_redraw__grid_cursor_goto([2, 5, 10])
         notif.text_display.set_cursor.assert_called_once_with(5, 10)
 
     def test_grid_line_single(self, notif):
         """Calls text_display.write_grid for a single line item."""
-        notif._n_redraw__grid_line([1, 3, 0, [["a", 1]], False])
+        notif._n_redraw__grid_line([2, 3, 0, [["a", 1]], False])
         notif.text_display.write_grid.assert_called_once_with(3, 0, [["a", 1]])
 
     def test_grid_line_multiple(self, notif):
         """Calls text_display.write_grid once per line item."""
         notif._n_redraw__grid_line(
-            [1, 3, 0, [["a", 1]], False],
-            [1, 4, 2, [["b", 1]], False],
+            [2, 3, 0, [["a", 1]], False],
+            [2, 4, 2, [["b", 1]], False],
         )
         assert notif.text_display.write_grid.call_count == 2
 
     def test_grid_resize(self, notif):
-        """Calls text_display.resize_view with (width, height)."""
-        notif._n_redraw__grid_resize([1, 80, 24])
+        """A window grid routes resize_view((width, height)) to the editor display."""
+        notif._n_redraw__grid_resize([2, 80, 24])
         notif.text_display.resize_view.assert_called_once_with((80, 24))
 
     def test_grid_scroll(self, notif):
         """Calls text_display.scroll with the correct row and column arguments."""
-        notif._n_redraw__grid_scroll([1, 0, 24, 0, 80, 3, 0])
+        notif._n_redraw__grid_scroll([2, 0, 24, 0, 80, 3, 0])
         notif.text_display.scroll.assert_called_once_with((0, 24, 3), (0, 80, 0))
 
     def test_hl_attr_define(self, notif, mocker):
@@ -236,6 +241,45 @@ class TestNvimNotificationsRedrawHandlers:
 
     def test_win_viewport(self, notif):
         """Calls call_async with adjust_viewport and the correct arguments."""
-        notif._n_redraw__win_viewport([1, {}, 10, 50, 25, 5, 100, 3])
+        notif._n_redraw__win_viewport([2, {}, 10, 50, 25, 5, 100, 3])
         nvim_notifications.call_async.assert_called_once_with(
             notif.main_window.adjust_viewport, 10, 50, 100, 5)
+
+
+class TestGridRegistry:
+
+    def test_global_grid_is_global(self):
+        """Grid 1 is always classified as the global grid."""
+        assert GridRegistry().kind_of(1) == "global"
+
+    def test_unknown_grid_is_a_window(self):
+        """Any grid that is neither global nor the message grid is a window."""
+        assert GridRegistry().kind_of(2) == "window"
+
+    def test_message_grid_is_classified(self):
+        """A grid registered via set_message_grid is classified as the message grid."""
+        reg = GridRegistry()
+        reg.set_message_grid(3)
+        assert reg.kind_of(3) == "message"
+        assert reg.kind_of(2) == "window"
+
+    def test_register_window_stores_handle(self):
+        """register_window keeps the Neovim window handle for the grid."""
+        reg = GridRegistry()
+        reg.register_window(2, "win-handle")
+        assert reg.windows[2] == "win-handle"
+
+    def test_forget_message_grid(self):
+        """Forgetting the message grid reverts its classification to window."""
+        reg = GridRegistry()
+        reg.set_message_grid(3)
+        reg.forget(3)
+        assert reg.kind_of(3) == "window"
+        assert reg.message_grid is None
+
+    def test_forget_window(self):
+        """Forgetting a window grid drops its stored handle."""
+        reg = GridRegistry()
+        reg.register_window(2, "win-handle")
+        reg.forget(2)
+        assert 2 not in reg.windows

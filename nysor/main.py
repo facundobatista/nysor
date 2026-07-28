@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollBar,
+    QSizePolicy,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -389,7 +390,7 @@ class MainApp(QMainWindow):
         # the editing views live under a tab system; for now there is a single tab, but this
         # is the foundation for multibuffer editing (FIXME.90)
         self.tabs = QTabWidget()
-        self.main_layout.addWidget(self.tabs)
+        self.main_layout.addWidget(self.tabs, stretch=1)
 
         # the editing view itself: the text display plus its scroll bars, wrapped in a
         # container widget so it can be held as a tab page
@@ -408,6 +409,20 @@ class MainApp(QMainWindow):
         editor_layout.addWidget(self.h_scroll)
 
         self.tabs.addTab(editor_widget, "[No Name]")
+
+        # the message strip: a display-only view of Neovim's message grid, always visible at
+        # the bottom of the window; it never takes focus nor mouse input, and its height is
+        # driven by Neovim (grows when a message spans several lines)
+        self.message_display = self.nvim_notifs.message_display = TextDisplay(
+            self, interactive=False
+        )
+        self.message_display.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.message_display.resize_view((80, 1))
+        # C? este 80 está hardcodeado acá? no debería ir en tandem e alguna manera con el otro display?
+        self.main_layout.addWidget(self.message_display)
+
         self.text_display.setFocus()
 
     def set_buffer_state(self, is_modified=None, filepath=None):
@@ -443,8 +458,9 @@ class MainApp(QMainWindow):
         """
         await self.nvi.setup_completed_event.wait()
 
-        # attach the UI
-        nvim_config = {"ext_linegrid": True}
+        # attach the UI; multigrid gives each Neovim window (and the message area) its own
+        # grid, which we route to separate displays (see NvimNotifications)
+        nvim_config = {"ext_linegrid": True, "ext_multigrid": True}
         await self.nvi.call("nvim_ui_attach", 80, 20, nvim_config)
 
         # the tab(s) are rendered by Qt, so Neovim must never use the top grid line for its
@@ -718,7 +734,7 @@ def start():
 
     if SPECIAL_STDIN_PATH in args.path:
         if len(args.path) == 1:
-            # succesful case of including the stdin path
+            # successful case of including the stdin path
             requested_paths = SPECIAL_STDIN_PATH
         else:
             raise ValueError("Cannot specify special '-' among other paths")
@@ -741,8 +757,8 @@ def start():
         nysor_version = get_nysor_version()
         logger.info("Starting Nysor {}", nysor_version)
 
-        # FIXME: enable multiple paths!
-        #if path not in (SPECIAL_STDIN_PATH, None):
+        # FIXME.90: enable multiple paths!
+        # if path not in (SPECIAL_STDIN_PATH, None):
         #    already_handled = await swarm.discover(event_loop, path)
         #    if already_handled:
         #        return

@@ -46,6 +46,45 @@ class DynamicCache:
             self._data[section].clear()
 
 
+class GridRegistry:
+    """Classify the grids Neovim sends under multigrid.
+
+    Grid 1 is the global compositing grid (never rendered directly). One grid is the
+    message grid (announced by 'msg_set_pos'); the bottom strip renders it. Every other
+    grid is a window grid (an editor window).
+    """
+
+    GLOBAL_GRID = 1
+    # C? Mejor GLOBAL_GRID_ID ?
+
+    def __init__(self):
+        self.message_grid = None
+        self.windows = {}  # grid_id -> Neovim window handle
+
+    def set_message_grid(self, grid_id):
+        """Record which grid is the message grid."""
+        self.message_grid = grid_id
+
+    def register_window(self, grid_id, win_handle):
+        """Associate a window grid with its Neovim window handle."""
+        self.windows[grid_id] = win_handle
+
+    def forget(self, grid_id):
+        """Drop a grid that was destroyed."""
+        self.windows.pop(grid_id, None)
+        if grid_id == self.message_grid:
+            self.message_grid = None
+
+    def kind_of(self, grid_id):
+        """Return the role of a grid: 'global', 'message', or 'window'."""
+        if grid_id == self.GLOBAL_GRID:
+            return "global"
+        # C? no está bueno tener estos strings "raros", qué te parece algo como GridRegistry.GRID_GLOBAL y GridRegistry.GRID_MESSAGE (que tienen el valor de la cadena, pero en el resto del código se usan esos atributos)
+        if grid_id == self.message_grid:
+            return "message"
+        return "window"
+
+
 class NvimNotifications:
     """Dance at the rhythm of Neovim.
 
@@ -55,13 +94,42 @@ class NvimNotifications:
 
     def __init__(self, main_window):
         self.main_window = main_window
-        self.text_display = None  # will be set before first usage
+        self.text_display = None  # editor (window grid) display; set before first usage
+        self.message_display = None  # bottom strip (message grid) display; set before use
         self.options = {}
 
         # this two currently work "in tandem", we may want to unify them under the same structure
         # in the future
         self.structs = {}
         self.dyncache = DynamicCache()
+
+        # multigrid bookkeeping
+        self.grids = GridRegistry()
+        self._global_size = (80, 24)  # size of the global grid (grid 1)
+        # C? de dónde sale este hardcodeo de 80 y 24?
+        self._grid_sizes = {}  # grid_id -> (width, height) as last reported by grid_resize
+        self._msg_row = None  # top row of the message grid within the global grid
+
+    def _display_for(self, grid_id):
+        """Return the display that renders the given grid, or None if not rendered."""
+        kind = self.grids.kind_of(grid_id)
+        if kind == "global":
+            return None
+        if kind == "message":
+            return self.message_display
+        return self.text_display
+
+    def _resize_message_display(self):
+        """Size the message strip: full width, height = rows below the msg_set_pos row."""
+        if self.message_display is None or self.grids.message_grid is None:
+            return
+        if self._msg_row is None:
+            return
+        width, _ = self._grid_sizes.get(self.grids.message_grid, self._global_size)
+        _, global_rows = self._global_size
+        visible = max(1, global_rows - self._msg_row)
+        self.message_display.resize_view((width, visible))
+        self.message_display.updateGeometry()
 
     def _h__redraw(self, *parameters: tuple[Any]):
         """Handle the 'redraw' notification."""
@@ -116,41 +184,83 @@ class NvimNotifications:
         self.dyncache.clean("default_colors")
 
     def _n_redraw__flush(self, _):
-        """Flush all changes to the grid."""
+        """Flush all changes to the grids."""
         self.text_display.flush()
+        if self.message_display is not None:
+            self.message_display.flush()
 
     def _n_redraw__grid_clear(self, args):
         """Clear the grid."""
         (grid_id,) = args
-        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
-        self.text_display.clear()
+        display = self._display_for(grid_id)
+        if display is not None:
+            display.clear()
 
     def _n_redraw__grid_cursor_goto(self, args):
-        """Resize a grid."""
+        """Move the cursor in the grid."""
         grid_id, row, col = args
-        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
-        self.text_display.set_cursor(row, col)
+        display = self._display_for(grid_id)
+        if display is not None:
+            display.set_cursor(row, col)
 
     def _n_redraw__grid_line(self, *args):
         """Expose a line in the grid."""
         for item in args:
             grid, row, col_start, cells, wrap = item
-            assert grid == 1  # FIXME.90: same question we do in grid_resize
-
-            # note we ignore "wrap", couldn't find proper utility for it
-            self.text_display.write_grid(row, col_start, cells)
+            display = self._display_for(grid)
+            if display is not None:
+                # note we ignore "wrap", couldn't find proper utility for it
+                display.write_grid(row, col_start, cells)
 
     def _n_redraw__grid_resize(self, args):
         """Resize a grid."""
         grid_id, width, height = args
-        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
-        self.text_display.resize_view((width, height))
+        self._grid_sizes[grid_id] = (width, height)
+        if grid_id == GridRegistry.GLOBAL_GRID:
+            self._global_size = (width, height)
+            return
+        if grid_id == self.grids.message_grid:
+            # the strip height is driven by msg_set_pos, not by the grid's own height
+            self._resize_message_display()
+            return
+        display = self._display_for(grid_id)
+        if display is not None:
+            display.resize_view((width, height))
 
     def _n_redraw__grid_scroll(self, args):
         """Scroll a grid."""
         grid_id, top, bottom, left, right, rows, cols = args
-        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
-        self.text_display.scroll((top, bottom, rows), (left, right, cols))
+        display = self._display_for(grid_id)
+        if display is not None:
+            display.scroll((top, bottom, rows), (left, right, cols))
+
+    def _n_redraw__grid_destroy(self, args):
+        """Drop a grid that Neovim destroyed (its window was closed)."""
+        (grid_id,) = args
+        self.grids.forget(grid_id)
+
+    def _n_redraw__win_pos(self, args):
+        """Associate a window grid with its Neovim window handle and geometry."""
+        grid_id, win, _startrow, _startcol, _width, _height = args
+        self.grids.register_window(grid_id, win)
+
+    def _n_redraw__win_hide(self, args):
+        """Handle a window no longer shown (e.g. it belongs to an inactive tabpage)."""
+        # FIXME.90: relevant for multi-tab; for now nothing to do with a single window
+
+    def _n_redraw__win_close(self, args):
+        """Handle a closed window; the paired grid_destroy cleans the registry."""
+
+    def _n_redraw__win_viewport_margins(self, args):
+        """Window internal margins (winbar, borders). Accepted and ignored for now."""
+        # FIXME.90: use it in adjust_viewport when a winbar/border is present
+
+    def _n_redraw__msg_set_pos(self, args):
+        """Define which grid is the message grid and where it starts."""
+        grid_id, row = args[0], args[1]
+        self.grids.set_message_grid(grid_id)
+        self._msg_row = row
+        self._resize_message_display()
 
     def _n_redraw__hl_attr_define(self, *args):
         """Add highlights with their attributes.
@@ -217,6 +327,8 @@ class NvimNotifications:
             assert size[0] == "h"
             size = float(size[1:])
             self.text_display.set_font(name, size)
+            if self.message_display is not None:
+                self.message_display.set_font(name, size)
 
     def _n_redraw__set_icon(self, param):
         """Set the icon, if any."""
