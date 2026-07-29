@@ -410,6 +410,19 @@ class MainApp(QMainWindow):
 
         self.tabs.addTab(editor_widget, "[No Name]")
 
+        # the statusline strip: a display-only view of the global grid's status row(s) (mode,
+        # file, position, etc.), which live on grid 1 under multigrid; sits above the messages
+        self.statusline_display = self.nvim_notifs.statusline_display = TextDisplay(
+            self, interactive=False
+        )
+        # fixed size: the strip is exactly as wide as its grid (Neovim's reported width),
+        # left-aligned so it lines up with the editor text above
+        self.statusline_display.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        self.statusline_display.resize_view((self.text_display.display_size[0], 1))
+        self.main_layout.addWidget(self.statusline_display, alignment=Qt.AlignmentFlag.AlignLeft)
+
         # the message strip: a display-only view of Neovim's message grid, always visible at
         # the bottom of the window; it never takes focus nor mouse input, and its height is
         # driven by Neovim (grows when a message spans several lines)
@@ -417,11 +430,11 @@ class MainApp(QMainWindow):
             self, interactive=False
         )
         self.message_display.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
-        self.message_display.resize_view((80, 1))
-        # C? este 80 está hardcodeado acá? no debería ir en tandem e alguna manera con el otro display?
-        self.main_layout.addWidget(self.message_display)
+        # start as a single line, as wide as the editor display; Neovim resizes it right away
+        self.message_display.resize_view((self.text_display.display_size[0], 1))
+        self.main_layout.addWidget(self.message_display, alignment=Qt.AlignmentFlag.AlignLeft)
 
         self.text_display.setFocus()
 

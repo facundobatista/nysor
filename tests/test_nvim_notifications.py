@@ -14,10 +14,12 @@ from nysor.nvim_notifications import DynamicCache, GridRegistry, NvimNotificatio
 
 @pytest.fixture
 def notif(mocker):
-    """NvimNotifications with mocked main_window, text_display, and call_async."""
+    """NvimNotifications with mocked main_window, displays, and call_async."""
     mocker.patch("nysor.nvim_notifications.call_async")
     nn = NvimNotifications(main_window=MagicMock())
     nn.text_display = MagicMock()
+    nn.message_display = MagicMock()
+    nn.statusline_display = MagicMock()
     return nn
 
 
@@ -143,9 +145,10 @@ class TestNvimNotificationsRedrawHandlers:
         notif._n_redraw__grid_clear([2])
         notif.text_display.clear.assert_called_once()
 
-    def test_grid_clear_global_grid_is_ignored(self, notif):
-        """The global grid (1) is never rendered, so clear() is not called."""
+    def test_grid_clear_global_grid_routes_to_statusline(self, notif):
+        """The global grid (1) is rendered by the statusline strip, not the editor."""
         notif._n_redraw__grid_clear([1])
+        notif.statusline_display.clear.assert_called_once()
         notif.text_display.clear.assert_not_called()
 
     def test_grid_cursor_goto(self, notif):

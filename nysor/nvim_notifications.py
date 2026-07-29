@@ -54,8 +54,12 @@ class GridRegistry:
     grid is a window grid (an editor window).
     """
 
-    GLOBAL_GRID = 1
-    # C? Mejor GLOBAL_GRID_ID ?
+    GLOBAL_GRID_ID = 1
+
+    # grid roles, returned by kind_of() and used across the code as GridRegistry.GRID_*
+    GRID_GLOBAL = "global"
+    GRID_MESSAGE = "message"
+    GRID_WINDOW = "window"
 
     def __init__(self):
         self.message_grid = None
@@ -76,13 +80,12 @@ class GridRegistry:
             self.message_grid = None
 
     def kind_of(self, grid_id):
-        """Return the role of a grid: 'global', 'message', or 'window'."""
-        if grid_id == self.GLOBAL_GRID:
-            return "global"
-        # C? no está bueno tener estos strings "raros", qué te parece algo como GridRegistry.GRID_GLOBAL y GridRegistry.GRID_MESSAGE (que tienen el valor de la cadena, pero en el resto del código se usan esos atributos)
+        """Return the role of a grid: GRID_GLOBAL, GRID_MESSAGE, or GRID_WINDOW."""
+        if grid_id == self.GLOBAL_GRID_ID:
+            return self.GRID_GLOBAL
         if grid_id == self.message_grid:
-            return "message"
-        return "window"
+            return self.GRID_MESSAGE
+        return self.GRID_WINDOW
 
 
 class NvimNotifications:
@@ -96,6 +99,7 @@ class NvimNotifications:
         self.main_window = main_window
         self.text_display = None  # editor (window grid) display; set before first usage
         self.message_display = None  # bottom strip (message grid) display; set before use
+        self.statusline_display = None  # strip rendering the status row(s) of the global grid
         self.options = {}
 
         # this two currently work "in tandem", we may want to unify them under the same structure
@@ -105,31 +109,57 @@ class NvimNotifications:
 
         # multigrid bookkeeping
         self.grids = GridRegistry()
-        self._global_size = (80, 24)  # size of the global grid (grid 1)
-        # C? de dónde sale este hardcodeo de 80 y 24?
         self._grid_sizes = {}  # grid_id -> (width, height) as last reported by grid_resize
         self._msg_row = None  # top row of the message grid within the global grid
+        self._window_bottoms = {}  # grid_id -> first global row below that window
 
     def _display_for(self, grid_id):
         """Return the display that renders the given grid, or None if not rendered."""
         kind = self.grids.kind_of(grid_id)
-        if kind == "global":
-            return None
-        if kind == "message":
+        if kind == GridRegistry.GRID_GLOBAL:
+            # under multigrid the global grid is empty except for the statusline row(s),
+            # which the statusline strip renders (using a view origin, see below)
+            return self.statusline_display
+        if kind == GridRegistry.GRID_MESSAGE:
             return self.message_display
         return self.text_display
 
-    def _resize_message_display(self):
-        """Size the message strip: full width, height = rows below the msg_set_pos row."""
-        if self.message_display is None or self.grids.message_grid is None:
+    def _layout_message_strip(self):
+        """Lay out the message strip from the message grid's own size and position.
+
+        Width is exactly the message grid's width (as Neovim reported it). The message grid is
+        full height but only its bottom part is on screen; that visible height is the grid's
+        height minus the row where 'msg_set_pos' placed it.
+        """
+        grid = self.grids.message_grid
+        if self.message_display is None or grid is None:
             return
-        if self._msg_row is None:
+        size = self._grid_sizes.get(grid)
+        if size is None or self._msg_row is None:
             return
-        width, _ = self._grid_sizes.get(self.grids.message_grid, self._global_size)
-        _, global_rows = self._global_size
-        visible = max(1, global_rows - self._msg_row)
-        self.message_display.resize_view((width, visible))
+        width, height = size
+        visible_rows = max(1, height - self._msg_row)
+        self.message_display.resize_view((width, visible_rows))
         self.message_display.updateGeometry()
+
+    def _layout_statusline_strip(self):
+        """Lay out the statusline strip: the global-grid rows between windows and messages.
+
+        Width is exactly the global grid's width (as Neovim reported it). The statusline sits
+        below the lowest window and above the message area, so we render that slice via a view
+        origin at the window bottom.
+        """
+        if self.statusline_display is None or not self._window_bottoms or self._msg_row is None:
+            return
+        size = self._grid_sizes.get(GridRegistry.GLOBAL_GRID_ID)
+        if size is None:
+            return
+        width, _ = size
+        top = max(self._window_bottoms.values())
+        rows = max(1, self._msg_row - top)
+        self.statusline_display.view_origin_row = top
+        self.statusline_display.resize_view((width, rows))
+        self.statusline_display.updateGeometry()
 
     def _h__redraw(self, *parameters: tuple[Any]):
         """Handle the 'redraw' notification."""
@@ -188,6 +218,8 @@ class NvimNotifications:
         self.text_display.flush()
         if self.message_display is not None:
             self.message_display.flush()
+        if self.statusline_display is not None:
+            self.statusline_display.flush()
 
     def _n_redraw__grid_clear(self, args):
         """Clear the grid."""
@@ -213,19 +245,16 @@ class NvimNotifications:
                 display.write_grid(row, col_start, cells)
 
     def _n_redraw__grid_resize(self, args):
-        """Resize a grid."""
+        """Resize a grid: render each grid's display at exactly the size Neovim reports."""
         grid_id, width, height = args
         self._grid_sizes[grid_id] = (width, height)
-        if grid_id == GridRegistry.GLOBAL_GRID:
-            self._global_size = (width, height)
-            return
-        if grid_id == self.grids.message_grid:
-            # the strip height is driven by msg_set_pos, not by the grid's own height
-            self._resize_message_display()
-            return
-        display = self._display_for(grid_id)
-        if display is not None:
-            display.resize_view((width, height))
+        kind = self.grids.kind_of(grid_id)
+        if kind == GridRegistry.GRID_WINDOW:
+            self.text_display.resize_view((width, height))
+        elif kind == GridRegistry.GRID_MESSAGE:
+            self._layout_message_strip()
+        elif kind == GridRegistry.GRID_GLOBAL:
+            self._layout_statusline_strip()
 
     def _n_redraw__grid_scroll(self, args):
         """Scroll a grid."""
@@ -234,33 +263,45 @@ class NvimNotifications:
         if display is not None:
             display.scroll((top, bottom, rows), (left, right, cols))
 
-    def _n_redraw__grid_destroy(self, args):
-        """Drop a grid that Neovim destroyed (its window was closed)."""
-        (grid_id,) = args
-        self.grids.forget(grid_id)
+    def _n_redraw__chdir(self, *args):
+        """Neovim changed its working directory. Nothing to render; ignored for now."""
 
-    def _n_redraw__win_pos(self, args):
-        """Associate a window grid with its Neovim window handle and geometry."""
-        grid_id, win, _startrow, _startcol, _width, _height = args
-        self.grids.register_window(grid_id, win)
+    def _n_redraw__grid_destroy(self, *args):
+        """Drop grids that Neovim destroyed (their windows were closed)."""
+        for (grid_id,) in args:
+            self.grids.forget(grid_id)
+            self._window_bottoms.pop(grid_id, None)
 
-    def _n_redraw__win_hide(self, args):
-        """Handle a window no longer shown (e.g. it belongs to an inactive tabpage)."""
+    def _n_redraw__win_pos(self, *args):
+        """Associate window grids with their Neovim window handles and geometry."""
+        for grid_id, win, startrow, _startcol, _width, height in args:
+            self.grids.register_window(grid_id, win)
+            # the statusline sits right below the window; track where each window ends so the
+            # statusline strip knows which global rows to render (recomputed, so it follows
+            # both growing and shrinking)
+            self._window_bottoms[grid_id] = startrow + height
+        self._layout_statusline_strip()
+
+    def _n_redraw__win_hide(self, *args):
+        """Handle windows no longer shown (e.g. belonging to an inactive tabpage)."""
         # FIXME.90: relevant for multi-tab; for now nothing to do with a single window
 
-    def _n_redraw__win_close(self, args):
-        """Handle a closed window; the paired grid_destroy cleans the registry."""
+    def _n_redraw__win_close(self, *args):
+        """Handle closed windows; the paired grid_destroy cleans the registry."""
 
-    def _n_redraw__win_viewport_margins(self, args):
+    def _n_redraw__win_viewport_margins(self, *args):
         """Window internal margins (winbar, borders). Accepted and ignored for now."""
         # FIXME.90: use it in adjust_viewport when a winbar/border is present
 
-    def _n_redraw__msg_set_pos(self, args):
+    def _n_redraw__msg_set_pos(self, *args):
         """Define which grid is the message grid and where it starts."""
-        grid_id, row = args[0], args[1]
-        self.grids.set_message_grid(grid_id)
-        self._msg_row = row
-        self._resize_message_display()
+        for batch in args:
+            grid_id, row = batch[0], batch[1]
+            self.grids.set_message_grid(grid_id)
+            self._msg_row = row
+        self._layout_message_strip()
+        # the message row is also the lower bound of the statusline region
+        self._layout_statusline_strip()
 
     def _n_redraw__hl_attr_define(self, *args):
         """Add highlights with their attributes.
@@ -329,6 +370,8 @@ class NvimNotifications:
             self.text_display.set_font(name, size)
             if self.message_display is not None:
                 self.message_display.set_font(name, size)
+            if self.statusline_display is not None:
+                self.statusline_display.set_font(name, size)
 
     def _n_redraw__set_icon(self, param):
         """Set the icon, if any."""

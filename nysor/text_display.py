@@ -166,7 +166,6 @@ class BaseDisplay(QWidget):
         """Handle a button mouse that was pressed."""
         if not self._interactive:
             return
-        # C? Por qué necesitamos esto si no tenemos mouse tracking? lo mismo en otras funciones acá abajo y en el del teclado arriba
         button = event.button()
 
         if button is MouseButton.RightButton:
@@ -313,6 +312,10 @@ class TextDisplay(BaseDisplay):
         self.cursor_pos = (0, 0)
         self.cursor_painter = lambda *a: None
         self.need_grid_clearing = True
+
+        # first grid row to paint at the top of the widget; non-zero lets a strip render a
+        # sub-range of a larger grid (e.g. the statusline strip shows only grid 1's status row)
+        self.view_origin_row = 0
 
         # cache to hold conversions between Neovim's highlight info and Qt formats
         self.nvimhl_to_qtfmt = {}
@@ -483,7 +486,7 @@ class TextDisplay(BaseDisplay):
             base_y = row * cell_height
             base_x = 0
 
-            logical_line = self.lines.get(row)
+            logical_line = self.lines.get(self.view_origin_row + row)
             if logical_line is None:
                 # no logical line, fill with background default color; note that this value is not
                 # ready at the very start, but it's there soon enough
@@ -510,7 +513,7 @@ class TextDisplay(BaseDisplay):
             base_y = row * cell_height
             base_x = 0
 
-            logical_line = self.lines.get(row)
+            logical_line = self.lines.get(self.view_origin_row + row)
             if logical_line is None:
                 continue
 
@@ -542,8 +545,8 @@ class TextDisplay(BaseDisplay):
                         painter, logical_char, base_x, slot_width, base_y, cell_height,
                     )
 
-                # the cursor, if that is the position
-                if col == cursor_col and row == cursor_row:
+                # the cursor, if that is the position (cursor row is in grid coordinates)
+                if col == cursor_col and self.view_origin_row + row == cursor_row:
                     self.cursor_painter(painter, base_x, base_y, slot_width - 1)
 
                 base_x += slot_width
