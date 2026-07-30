@@ -336,6 +336,116 @@ class MainMenu:
         dlg.exec()
 
 
+class EditorPane(QWidget):
+    """A tab page: one editor TextDisplay with its own vertical/horizontal scroll bars.
+
+    Each Neovim window (tabpage) gets its own pane, so scroll positions are independent and
+    preserved across tab switches.
+    """
+
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.text_display = TextDisplay(main_window)
+        self.text_display.pane = self  # back-reference so viewport events can reach the pane
+
+        self.v_scroll = QScrollBar(Qt.Orientation.Vertical)
+        self.v_scroll.setMinimum(0)
+        self.v_scroll.setMaximum(100)
+        self.v_scroll.valueChanged.connect(self.vertical_scroll_changed)
+        self.v_scroll_last_position = None
+
+        self.h_scroll = QScrollBar(Qt.Orientation.Horizontal)
+        self.h_scroll.setMinimum(0)
+        self.h_scroll.setMaximum(100)
+        self.h_scroll.valueChanged.connect(self.horizontal_scroll_changed)
+        self.h_scroll_last_position = None
+
+        layout = QVBoxLayout(self)
+        hbox = QHBoxLayout()
+        hbox.addWidget(self.text_display, stretch=1)
+        hbox.addWidget(self.v_scroll)
+        layout.addLayout(hbox)
+        layout.addWidget(self.h_scroll)
+
+    async def adjust_viewport(self, topline, botline, line_count, curcol):
+        """Adjust this pane's scroll bars according to what Neovim says.
+
+        Called from the Neovim layer on this window's viewport change notifications.
+        """
+        display_width, display_height = self.text_display.display_size
+
+        # vertical: use information from the viewport
+        if topline == 0 and line_count <= display_height:
+            self.v_scroll.setEnabled(False)
+            self.v_scroll.setMaximum(0)
+        else:
+            self.v_scroll.setEnabled(True)
+            self.v_scroll.setPageStep(display_height)
+            self.v_scroll.setMaximum(line_count - 1)
+            self.v_scroll_last_position = topline  # before setting value to ignore later event
+            self.v_scroll.setValue(topline)
+
+        # only if not wrapping, using current column but also queried line lengths
+        is_wrapping = await self.main_window.nvi.call("nvim_get_option_value", "wrap", {})
+        if is_wrapping:
+            # just turn off the scroll bar as when wrapping all text will be inside the window
+            self.h_scroll.setEnabled(False)
+            self.h_scroll.setMaximum(0)
+            return
+
+        # get the lengths of lines that are currently shown
+        buf = 0  # FIXME.90: why 0? first buffer per window? revisit when multiple windows
+        start = topline + 1  # getbufline's first line is 1
+        end = botline - 1  # botline is the "next line, out of the view"
+        cmd = f"map(getbufline({buf}, {start}, {end}), {{key, val -> strlen(val)}})"
+        line_lengths = await self.main_window.nvi.call("nvim_eval", cmd)
+        if not line_lengths:
+            return
+
+        max_line = max(line_lengths)
+        if max_line <= display_width:
+            self.h_scroll.setEnabled(False)
+            self.h_scroll.setMaximum(0)
+        else:
+            self.h_scroll.setEnabled(True)
+            self.h_scroll.setPageStep(display_width)
+            self.h_scroll.setMaximum(max_line - 1)
+
+            win_info = await self.main_window.nvi.call("nvim_eval", "winsaveview()")
+            leftcol = win_info["leftcol"]
+            self.h_scroll_last_position = leftcol  # before setting value to ignore later event
+            self.h_scroll.setValue(leftcol)
+
+    def vertical_scroll_changed(self, value):
+        """Handle the vertical scroll bar being modified through the widget."""
+        delta = value - self.v_scroll_last_position
+        if delta > 0:
+            # down
+            cmdkey = "\x05"
+        elif delta < 0:
+            # up
+            cmdkey = "\x19"
+        else:
+            return
+        self.v_scroll_last_position = value
+        self.main_window.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
+
+    def horizontal_scroll_changed(self, value):
+        """Handle the horizontal scroll bar being modified through the widget."""
+        delta = value - self.h_scroll_last_position
+        if delta > 0:
+            # right
+            cmdkey = "zl"
+        elif delta < 0:
+            # left
+            cmdkey = "zh"
+        else:
+            return
+        self.h_scroll_last_position = value
+        self.main_window.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
+
+
 class MainApp(QMainWindow):
     """The main application window."""
 
@@ -370,45 +480,20 @@ class MainApp(QMainWindow):
         self._swarm = swarm.SwarmServer(loop, self._path_discover_cb)
         loop.create_task(self.setup_nvim(paths_to_open))
 
-        # scrollbars
-        self.v_scroll = QScrollBar(Qt.Orientation.Vertical)
-        self.v_scroll.valueChanged.connect(self.vertical_scroll_changed)
-        self.v_scroll.setMinimum(0)
-        self.v_scroll.setMaximum(100)
-        self.v_scroll_last_position = None
-        self.h_scroll = QScrollBar(Qt.Orientation.Horizontal)
-        self.h_scroll.valueChanged.connect(self.horizontal_scroll_changed)
-        self.h_scroll.setMinimum(0)
-        self.h_scroll.setMaximum(100)
-        self.h_scroll_last_position = None
-
         # central widget to hold main layout
         self.central_widget = QWidget(self)
         self.setCentralWidget(self.central_widget)
         self.main_layout = QVBoxLayout(self.central_widget)
 
-        # the editing views live under a tab system; for now there is a single tab, but this
-        # is the foundation for multibuffer editing (FIXME.90)
+        # the editors live under a tab system: one tab (an EditorPane, with its own scroll bars)
+        # per Neovim window. Panes are created on demand; the first is pre-created here and
+        # claimed by the first window. 'text_display' tracks the active editor display.
         self.tabs = QTabWidget()
         self.main_layout.addWidget(self.tabs, stretch=1)
 
-        # the editing view itself: the text display plus its scroll bars, wrapped in a
-        # container widget so it can be held as a tab page
-        self.text_display = self.nvim_notifs.text_display = TextDisplay(self)
-
-        editor_widget = QWidget()
-        editor_layout = QVBoxLayout(editor_widget)
-
-        # horizontal layout for text display and vertical scroll bar
-        hbox = QHBoxLayout()
-        hbox.addWidget(self.text_display, stretch=1)
-        hbox.addWidget(self.v_scroll)
-        editor_layout.addLayout(hbox)
-
-        # rest of vertical widgets
-        editor_layout.addWidget(self.h_scroll)
-
-        self.tabs.addTab(editor_widget, "[No Name]")
+        self._unclaimed_pane = EditorPane(self)
+        self.tabs.addTab(self._unclaimed_pane, "[No Name]")
+        self.text_display = self._unclaimed_pane.text_display
 
         # the statusline strip: a display-only view of the global grid's status row(s) (mode,
         # file, position, etc.), which live on grid 1 under multigrid; sits above the messages
@@ -441,7 +526,7 @@ class MainApp(QMainWindow):
     def set_buffer_state(self, is_modified=None, filepath=None):
         """Set the state state."""
         logger.debug("Set buffer state; is_modified={} filepath={}", is_modified, filepath)
-        # FIXME.90 -- all these needs to evolve to multibuffers
+        # FIXME.90 -- modified state is still global; make it per-tab in a later step
         if is_modified is not None:
             self.state_buffer_is_modified = is_modified
             self._menu.actions["file__save"].setEnabled(is_modified)
@@ -449,7 +534,36 @@ class MainApp(QMainWindow):
         if filepath is not None:
             self.state_buffer_filepath = filepath
             label = os.path.basename(filepath) if filepath else "[No Name]"
-            self.tabs.setTabText(0, label)
+            self.tabs.setTabText(self.tabs.currentIndex(), label)
+
+    def build_editor_tab(self):
+        """Create (or reuse the initial) editor pane and its tab, returning its display."""
+        if self._unclaimed_pane is not None:
+            pane = self._unclaimed_pane
+            self._unclaimed_pane = None
+        else:
+            pane = EditorPane(self)
+            self.tabs.addTab(pane, "[No Name]")
+        return pane.text_display
+
+    def destroy_editor_tab(self, display):
+        """Remove the tab holding the given editor display (its window was closed)."""
+        pane = display.pane
+        index = self.tabs.indexOf(pane)
+        if index != -1:
+            self.tabs.removeTab(index)
+        pane.deleteLater()
+        if self.text_display is display:
+            current = self.tabs.currentWidget()
+            self.text_display = current.text_display if current is not None else None
+
+    def set_active_editor(self, display):
+        """Make the given editor display the active one (select its tab and focus it)."""
+        self.text_display = display
+        index = self.tabs.indexOf(display.pane)
+        if index != -1 and self.tabs.currentIndex() != index:
+            self.tabs.setCurrentIndex(index)
+        display.setFocus()
 
     def _path_discover_cb(self, path):
         """Indicate if the given path is opened here and claim GUI attention if so."""
@@ -508,9 +622,9 @@ class MainApp(QMainWindow):
         if paths_to_open == SPECIAL_STDIN_PATH:
             await self._feed_neovim_from_stdin()
         else:
-            for path in paths_to_open:
-                print("========== op", repr(path))
-                await self._feed_neovim_from_path(path)
+            # first path opens in the current window; the rest open each in a new tabpage
+            for index, path in enumerate(paths_to_open):
+                await self._feed_neovim_from_path(path, new_tab=index > 0)
 
     async def _feed_neovim_from_stdin(self):
         """Feed neovim with data read from standard input."""
@@ -531,9 +645,9 @@ class MainApp(QMainWindow):
         os.close(temp_fd)
         await self._feed_neovim_from_path(temp_filepath)
 
-    async def _feed_neovim_from_path(self, path_to_open):
-        """Indicate neovim to open a file from a path."""
-        cmd = {"cmd": "edit", "args": [path_to_open]}
+    async def _feed_neovim_from_path(self, path_to_open, new_tab=False):
+        """Indicate neovim to open a file from a path, in the current window or a new tabpage."""
+        cmd = {"cmd": "tabedit" if new_tab else "edit", "args": [path_to_open]}
         opts = {"output": False}  # don't capture output
         try:
             await self.nvi.call("nvim_cmd", cmd, opts)
@@ -613,84 +727,6 @@ class MainApp(QMainWindow):
         """Present a context window with some options for the user."""
         # FIXME.93
         log_notdone("Mouse context window!")
-
-    async def adjust_viewport(self, topline, botline, line_count, curcol):
-        """Adjust scrollbar according to what Neovim says.
-
-        Called from the Neovim layer on viewport changes notifications.
-        """
-        display_width, display_height = self.text_display.display_size
-
-        # vertical: use information from the viewport
-        if topline == 0 and line_count <= display_height:
-            self.v_scroll.setEnabled(False)
-            self.v_scroll.setMaximum(0)
-        else:
-            self.v_scroll.setEnabled(True)
-            self.v_scroll.setPageStep(display_height)
-            self.v_scroll.setMaximum(line_count - 1)
-            self.v_scroll_last_position = topline  # before setting value to ignore later event
-            self.v_scroll.setValue(topline)
-
-        # only if not wrapping, using current column but also queried line lengths
-        # FIXME.90: a "scope" can be given here, revisit this when we have multiple windows
-        is_wrapping = await self.nvi.call("nvim_get_option_value", "wrap", {})
-        if is_wrapping:
-            # just turn off the scroll bar as when wrapping all text will be inside the window
-            self.h_scroll.setEnabled(False)
-            self.h_scroll.setMaximum(0)
-            return
-
-        # get the lengths of lines that are currently shown
-        buf = 0  # FIXME.90: why 0? first buffer per window? revisit when multiple windows
-        start = topline + 1  # getbufline's first line is 1
-        end = botline - 1  # botline is the "next line, out of the view"
-        cmd = f"map(getbufline({buf}, {start}, {end}), {{key, val -> strlen(val)}})"
-        line_lengths = await self.nvi.call("nvim_eval", cmd)
-        if not line_lengths:
-            return
-
-        max_line = max(line_lengths)
-        if max_line <= display_width:
-            self.h_scroll.setEnabled(False)
-            self.h_scroll.setMaximum(0)
-        else:
-            self.h_scroll.setEnabled(True)
-            self.h_scroll.setPageStep(display_width)
-            self.h_scroll.setMaximum(max_line - 1)
-
-            win_info = await self.nvi.call("nvim_eval", "winsaveview()")
-            leftcol = win_info["leftcol"]
-            self.h_scroll_last_position = leftcol  # before setting value to ignore later event
-            self.h_scroll.setValue(leftcol)
-
-    def vertical_scroll_changed(self, value):
-        """Handle the vertical scroll bar being modified through the widget."""
-        delta = value - self.v_scroll_last_position
-        if delta > 0:
-            # down
-            cmdkey = "\x05"
-        elif delta < 0:
-            # up
-            cmdkey = "\x19"
-        else:
-            return
-        self.v_scroll_last_position = value
-        self.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
-
-    def horizontal_scroll_changed(self, value):
-        """Handle the horizontal scroll bar being modified through the widget."""
-        delta = value - self.h_scroll_last_position
-        if delta > 0:
-            # right
-            cmdkey = "zl"
-        elif delta < 0:
-            # left
-            cmdkey = "zh"
-        else:
-            return
-        self.h_scroll_last_position = value
-        self.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
 
     # -- set of functions to interact with buffers/neovim
 

@@ -1,74 +1,73 @@
-# Plan incremental — Multibuffer con tabs (Camino A: multigrid) — v3
+# Incremental plan — Multibuffer with tabs (Path A: multigrid) — v3
 
-Objetivo: abrir varios archivos, verlos como tabs de Qt, switchear desde la GUI, y
-eventualmente poder detachear un tab a una ventana suelta para ver dos buffers en vivo
-lado a lado.
+Goal: open several files, see them as Qt tabs, switch from the GUI, and eventually be able to
+detach a tab into a separate window to see two buffers live side by side.
 
-Mecanismo elegido: **`ext_multigrid`** (un grid por ventana de Neovim), **con
-`ext_cmdline`** (command-line renderizada por un widget de Qt) pero **sin `ext_messages`**
-(los mensajes siguen cayendo en el *message grid*, ver abajo).
+Chosen mechanism: **`ext_multigrid`** (one grid per Neovim window), **with `ext_cmdline`**
+(command-line rendered by a Qt widget) but **without `ext_messages`** (messages still land on
+the *message grid*, see below).
 
-Decisiones tomadas:
-- **Franja de mensajes:** franja fija al pie, siempre visible; crece a varias líneas cuando
-  el mensaje lo requiere (ver "modelo de grids").
-- **Mapeo:** **tab ↔ tabpage** de Neovim (`:tabedit`). El detach del Paso 7 convierte ese
-  caso a split para tener los dos buffers vivos a la vez.
+Decisions taken:
+- **Message strip:** a fixed strip at the bottom, always visible; it grows to several lines when
+  the message needs it (see "grid model").
+- **Mapping:** **tab ↔ Neovim tabpage** (`:tabedit`). The detach in Step 7 turns that case into a
+  split so both buffers stay live at the same time.
 
-**Versión de Neovim: `~/sistema/nvim-0.12.2`** (binario AppImage que usamos para el
-desarrollo). Todo lo de abajo está **verificado empíricamente** contra ese binario (attaché
-una UI multigrid y observé los eventos reales), no de memoria. Las firmas de eventos salen de
-`nvim_get_api_info().ui_events` de esa versión.
+**Neovim version: `~/sistema/nvim-0.12.2`** (the AppImage binary we use for development).
+Everything below is **verified empirically** against that binary (attached a multigrid UI and
+observed the real events), not from memory. The event signatures come from
+`nvim_get_api_info().ui_events` of that version.
 
-Principio de cada paso: **que compile, corra y se pueda probar solo**, sin romper lo
-anterior. Cada paso deja algo demostrable.
+Principle for every step: **it compiles, runs, and can be tested on its own**, without breaking
+what came before. Each step leaves something demonstrable.
 
-## Sobre las pruebas
+## About the tests
 
-- **No hacemos unit tests que solo mockeen la GUI**: terminan mockeando todo y no prueban
-  nada real. La verificación de comportamiento visual/interactivo es **manual**, en vivo.
-- **Sí testeamos las estructuras de datos nuevas** que tengan lógica propia (el registro de
-  grids del Paso 1 es el caso claro). Esos tests van en `tests/` con `pytest tests/`, sin GUI.
-- Correr la app: `python -m nysor <paths>` (o el script `nysor`). Hay `ex1.txt`/`ex2.txt`
-  para probar.
+- **We do not write unit tests that only mock the GUI**: they end up mocking everything and test
+  almost nothing real. Visual/interactive behavior is verified **manually**, live.
+- **We do test new data structures** that carry their own logic (the grid registry from Step 1 is
+  the clear case). Those tests live in `tests/`, run with `pytest tests/`, no GUI.
+- Run the app: `python -m nysor <paths>` (or the `nysor` script). There are `ex1.txt`/`ex2.txt`
+  to test with.
 
 ---
 
-## Modelo de grids en multigrid (verificado en 0.12.2)
+## Grid model under multigrid (verified on 0.12.2)
 
-Al hacer `nvim_ui_attach(80, 24, {ext_linegrid, ext_multigrid})` aparecen **tres** grids
-(con 1 archivo abierto), y cada uno lo renderizamos en un display distinto:
+Calling `nvim_ui_attach(80, 24, {ext_linegrid, ext_multigrid})` produces **three** grids (with 1
+file open), and we render each one in a different display:
 
-| grid | qué es | lo renderizamos en | cómo lo identifico |
-|------|--------|--------------------|--------------------|
-| **2** (luego 4, 6…) | **ventana / editor** (1 por *window* de Neovim; ahora 1) | `text_display` | `win_pos [grid, win, row, col, w, h]` |
-| **1** | **grid global**: full-size, pero su área de ventana queda **vacía** bajo multigrid; lo único dibujado ahí es la **statusline** (y la tabline, que apagamos) | `statusline_display` (solo la rebanada de la statusline) | es el `grid=1` de siempre |
-| **3** | **grid de mensajes Y command-line** (¡la misma grilla!): mensajes ("written") y lo que se tipea en la cmdline (`:w`, `/foo`) | `message_display` | `msg_set_pos [grid, row, scrolled, ...]` |
-| **5+** | **floating windows** (p.ej. el popup de completado de `:e foo<Tab>`); transitorios | — (**no** los dibujamos aún) | `win_float_pos [...]` |
+| grid | what it is | rendered in | how we identify it |
+|------|------------|-------------|--------------------|
+| **2** (then 4, 6…) | **window / editor** (one per Neovim *window*; now 1) | `text_display` | `win_pos [grid, win, row, col, w, h]` |
+| **1** | **global grid**: full-size, but its window area stays **empty** under multigrid; the only thing drawn there is the **statusline** (and the tabline, which we disable) | `statusline_display` (only the statusline slice) | it is the usual `grid=1` |
+| **3** | **messages AND command-line grid** (the same grid!): messages ("written") and what you type in the cmdline (`:w`, `/foo`) | `message_display` | `msg_set_pos [grid, row, scrolled, ...]` |
+| **5+** | **floating windows** (e.g. the completion popup of `:e foo<Tab>`); transient | — (**not** drawn yet) | `win_float_pos [...]` |
 
-Consecuencias clave (y correcciones a versiones anteriores del plan y a confusiones comunes):
+Key consequences (and corrections to earlier versions of the plan and to common confusions):
 
-- **NO hay un grid de cmdline y otro de mensajes por separado.** Es **uno solo** (grid 3): sirve
-  para mensajes *y* para la command-line. Hoy, si tipeás `:saveas foo`, se ve en la franja de
-  abajo (la mostramos). Recién en el **Paso 6 (`ext_cmdline`)** la cmdline se **separa** de grid 3:
-  deja de dibujarse ahí y pasa a llegar por eventos (`cmdline_show`), que renderizamos en un
-  widget de Qt propio. Ahí sí habrá un "aparato de cmdline" aparte.
-- **El grid 1 NO es el editor.** Es el grid global; su área de ventana está vacía (la ventana
-  dibuja en grid 2). De grid 1 renderizamos **solo la rebanada de la statusline**: las filas
-  `[fondo_de_la_ventana .. fila_de_mensajes−1]`. No es "la última línea porque sí"; es *esa*
-  franja porque ahí Neovim dibuja la statusline (con 1 ventana da 1 línea, la fila 22 de 24).
-- **El alto de las franjas no se fuerza**, sale de Neovim: la de mensajes = `alto_grid3 −
-  fila_de_msg_set_pos` (crece sola si el mensaje es multilínea); la de statusline = la rebanada
-  de arriba. El **ancho** de cada franja sale directo del `grid_resize` de *su* grid.
-- **Lo que "se pierde" hoy** no son los mensajes (esos se ven), sino los **floating windows**
-  (grids 5+, p.ej. el popup de completado): no los dibujamos todavía. Queda para cuando
-  manejemos floats.
-- **Handles de ventana (`win`) llegan como `ExtType(code=1, ...)`**, que `nvim_interface`
-  ya decodifica vía `ext_hook`. Sirven para `nvim_set_current_win` (Paso 3).
-- **Eventos nuevos que hoy manejamos (antes logueaban "not implemented"):** `win_pos`,
-  `win_hide`, `win_close`, `grid_destroy`, `msg_set_pos`, `chdir`, y **`win_viewport_margins`**
-  (este último es `[since 12]`, nuevo en 0.12).
+- **There is NOT a separate cmdline grid and messages grid.** It is a **single one** (grid 3): it
+  serves both messages *and* the command-line. Today, if you type `:saveas foo`, it shows in the
+  bottom strip (we render it). Only in **Step 6 (`ext_cmdline`)** does the cmdline **split off**
+  from grid 3: it stops being drawn there and starts arriving through events (`cmdline_show`),
+  which we render in a dedicated Qt widget. Only then is there a separate "cmdline surface".
+- **Grid 1 is NOT the editor.** It is the global grid; its window area is empty (the window draws
+  on grid 2). From grid 1 we render **only the statusline slice**: the rows
+  `[window_bottom .. message_row − 1]`. It is not "the last line just because"; it is *that* slice
+  because that is where Neovim draws the statusline (with 1 window it is 1 line, row 22 of 24).
+- **The strips' height is not forced**, it comes from Neovim: the message one =
+  `grid3_height − msg_set_pos_row` (grows on its own when the message is multi-line); the
+  statusline one = the slice above. The **width** of each strip comes straight from the
+  `grid_resize` of *its own* grid.
+- **What "gets lost" today** is not the messages (those show), but the **floating windows**
+  (grids 5+, e.g. the completion popup): we do not draw them yet. Left for when we handle floats.
+- **Window handles (`win`) arrive as `ExtType(code=1, ...)`**, which `nvim_interface` already
+  decodes via `ext_hook`. They are used for `nvim_set_current_win` (Step 3).
+- **New events we now handle (they previously logged "not implemented"):** `win_pos`, `win_hide`,
+  `win_close`, `grid_destroy`, `msg_set_pos`, `chdir`, and **`win_viewport_margins`** (this last
+  one is `[since 12]`, new in 0.12).
 
-Firmas relevantes (de la API de 0.12.2):
+Relevant signatures (from the 0.12.2 API):
 
 ```
 grid_resize(grid, width, height)
@@ -80,219 +79,213 @@ win_pos(grid, win, startrow, startcol, width, height)
 win_hide(grid)
 win_close(grid)
 win_viewport(grid, win, topline, botline, curline, curcol, line_count, scroll_delta)
-win_viewport_margins(grid, win, top, bottom, left, right)          # nuevo en 0.12
+win_viewport_margins(grid, win, top, bottom, left, right)          # new in 0.12
 win_float_pos(grid, win, anchor, anchor_grid, anchor_row, anchor_col, mouse_enabled, zindex, compindex, screen_row, screen_col)
 msg_set_pos(grid, row, scrolled, sep_char, zindex, compindex)
-cmdline_show(content, pos, firstc, prompt, indent, level, hl_id)   # hl_id agregado en versiones nuevas
+cmdline_show(content, pos, firstc, prompt, indent, level, hl_id)   # hl_id added in newer versions
 cmdline_pos(pos, level)
 cmdline_hide(level, abort)
 ```
 
 ---
 
-## Paso 1 — Activar `ext_multigrid` (una sola ventana) + registro de grids + franja de mensajes
+## Step 1 — Enable `ext_multigrid` (single window) + grid registry + message strip
 
-Este paso fusiona la ex-"costura de ruteo" (indirección `grid_id → display`) con la
-activación de multigrid, porque por separado la primera es trivial.
+This step merges the former "routing seam" (the `grid_id → display` indirection) with enabling
+multigrid, because on its own the first part is trivial.
 
-### Qué toco
+### What I touch
 
-**a) Indirección `grid_id → display`.** Hoy los handlers de `nvim_notifications.py` asumen un
-único `TextDisplay` y tienen `assert grid_id == 1`. Los cambio para que busquen el display en
-un **registro** por `grid_id`. Sin esto, multigrid no tiene a dónde rutear.
+**a) `grid_id → display` indirection.** Today the handlers in `nvim_notifications.py` assume a
+single `TextDisplay` and have `assert grid_id == 1`. I change them to look the display up in a
+**registry** keyed by `grid_id`. Without this, multigrid has nowhere to route.
 
-**b) El registro de grids (estructura nueva, testeable).** Mapea `grid_id → record`:
+**b) The grid registry (new, testable data structure).** Maps `grid_id → record`:
 
 ```
 GridRecord: kind ('window' | 'message'), text_display, tab_index, win_handle, scrollbars, ...
 ```
 
-Con `add`/`get`/`remove` y noción de "grid activo". **Esta es la estructura que sí testeamos**
-(alta/baja/lookup, grid activo, distinguir window vs message), sin tocar la GUI.
+With `add`/`get`/`remove` and a notion of "active grid". **This is the structure we do test**
+(add/remove/lookup, active grid, distinguishing window vs message), without touching the GUI.
 
-**c) Activar multigrid.** `setup_nvim` → `{"ext_linegrid": True, "ext_multigrid": True}`.
-Aparecen los grids 1/2/3 como en la tabla. Mapeo el **grid de ventana** (2) al `TextDisplay`/
-tab que ya existe, creo la **franja** para el message grid (3), y **dejo de renderizar el
-grid 1**.
+**c) Enable multigrid.** `setup_nvim` → `{"ext_linegrid": True, "ext_multigrid": True}`. Grids
+1/2/3 appear as in the table. I map the **window grid** (2) to the existing `TextDisplay`/tab,
+create the **strip** for the message grid (3), and **stop rendering grid 1**.
 
-**d) Resize.** En la base **tab ↔ tabpage** todas las tabpages usan el área completa, así que
-el resize sigue siendo **global** con `nvim_ui_try_resize(cols, rows)` (redimensiona grid 1 y,
-en consecuencia, la ventana activa). `nvim_ui_try_resize_grid(grid, ...)` (tamaño por grid
-independiente) recién hace falta en el **Paso 7** (splits/detach), no ahora. *(Corrige la v2,
-que lo ponía acá.)*
+**d) Resize.** In the **tab ↔ tabpage** base every tabpage uses the whole area, so the resize
+stays **global** via `nvim_ui_try_resize(cols, rows)` (resizes grid 1 and, in turn, the active
+window). `nvim_ui_try_resize_grid(grid, ...)` (per-grid independent sizing) is only needed in
+**Step 7** (splits/detach), not now. *(This corrects v2, which put it here.)*
 
-**e) Handlers nuevos:** `win_pos`, `grid_destroy`, `msg_set_pos`, y `win_viewport_margins`
-(por ahora se puede ignorar, pero hay que aceptarlo para no ensuciar el log). Detalle abajo.
+**e) New handlers:** `win_pos`, `grid_destroy`, `msg_set_pos`, and `win_viewport_margins` (can be
+ignored for now, but must be accepted so the log stays clean). Detail below.
 
-**f) La franja de mensajes.** Detalle abajo.
+**f) The message strip.** Detail below.
 
-### Detalle: la franja de mensajes (el *message grid*)
+### Detail: the message strip (the *message grid*)
 
-- **Qué es:** un grid dedicado (grid 3) que Neovim ubica con `msg_set_pos [grid, row, scrolled,
-  ...]`. `row` es la fila del grid global donde arranca el message grid. En reposo `row = 23`
-  (última línea) → **1 línea visible**. El contenido llega como `grid_line` normal sobre ese
-  grid.
-- **Mensajes multilínea → SÍ soportados (responde tu FIXME).** Cuando el mensaje/cmdline no
-  entra en una línea, Neovim **baja el `row`** de `msg_set_pos` (lo vi pasar a 22 con
-  `scrolled=True` al tipear un path largo) → la franja **crece**. Alto de la franja en líneas =
-  `global_rows - row`. Con `:messages`, errores largos o prompts "press ENTER", crece más.
-  Todo esto lo maneja el Paso 1; no queda nada afuera.
-- **Popup de completado de `:edit foo<Tab>` → esto SÍ queda fuera de alcance (pero no rompe
-  nada).** Es una cosa **distinta** de los mensajes multilínea: al completar, Neovim abre un
-  **floating window** aparte (grid transitorio nuevo, vía `win_float_pos`; lo vi como grid 5 en
-  el probe) con la lista de candidatos. Eso es maquinaria de *floats*, no del message grid. Sin
-  dibujar ese float, **el completado sigue funcionando** (Neovim completa el texto igual); lo
-  único que no se ve es la **lista visual de candidatos**, hasta que agreguemos soporte de
-  floating windows (ver "Notas transversales").
-- **Solo-display, sin foco ni mouse (responde tu FIXME):** la franja es puramente informativa.
-  No debe robar teclado ni aceptar clicks. El `TextDisplay` actual instala foco (`StrongFocus`)
-  y handlers de mouse/teclado en `BaseDisplay`; para la franja uso una variante **display-only**
-  (`NoFocus`, sin reenviar mouse/teclado). Concreto: conviene separar en `BaseDisplay` un modo
-  read-only, o una subclase que no instale esos handlers.
-- **¿Reuso `text_display.py`?** Sí. El render de celdas (celda → `CharFormat` → `QPainter`,
-  highlights, chars anchos, fuente) ya está en `TextDisplay`. Instancio un `TextDisplay`
-  display-only atado al message grid; su alto visible lo manejo con el `row` de `msg_set_pos`.
+- **What it is:** a dedicated grid (grid 3) that Neovim places with `msg_set_pos [grid, row,
+  scrolled, ...]`. `row` is the global-grid row where the message grid starts. At rest `row = 23`
+  (last line) → **1 visible line**. Content arrives as normal `grid_line` on that grid.
+- **Multi-line messages → supported.** When the message/cmdline does not fit in one line, Neovim
+  **lowers the `row`** of `msg_set_pos` (observed it go to 22 with `scrolled=True` when typing a
+  long path) → the strip **grows**. Strip height in lines = `global_rows - row`. With `:messages`,
+  long errors, or "press ENTER" prompts, it grows further. Step 1 handles all of this.
+- **Completion popup of `:edit foo<Tab>` → out of scope (but nothing breaks).** This is a
+  **different** thing from multi-line messages: while completing, Neovim opens a separate
+  **floating window** (a new transient grid, via `win_float_pos`; observed as grid 5 in the probe)
+  with the candidate list. That is *floats* machinery, not the message grid. Without drawing that
+  float, **completion still works** (Neovim completes the text anyway); the only thing not shown
+  is the **visual candidate list**, until we add floating-window support (see "Cross-cutting
+  notes").
+- **Display-only, no focus nor mouse:** the strip is purely informational. It must not steal the
+  keyboard nor accept clicks. The current `TextDisplay` installs focus (`StrongFocus`) and
+  mouse/keyboard handlers in `BaseDisplay`; for the strip I use a **display-only** variant
+  (`NoFocus`, no forwarding of mouse/keyboard). Concretely: better to add a read-only mode to
+  `BaseDisplay`, or a subclass that does not install those handlers.
+- **Reuse `text_display.py`?** Yes. The cell rendering (cell → `CharFormat` → `QPainter`,
+  highlights, wide chars, font) is already in `TextDisplay`. I instantiate a display-only
+  `TextDisplay` bound to the message grid; its visible height is driven by the `row` of
+  `msg_set_pos`.
 
-### Detalle: handlers `win_pos`, `grid_destroy`, `msg_set_pos`, `win_viewport_margins`
+### Detail: handlers `win_pos`, `grid_destroy`, `msg_set_pos`, `win_viewport_margins`
 
-- **`win_pos(grid, win, startrow, startcol, width, height)`:** asocia un `grid` con su ventana
-  (`win`) y su geometría. Es cómo aprendo "el grid 2 es la ventana de edición" para atarlo al
-  tab/`TextDisplay`. El `win` lo necesito para enfocar/switchear (Paso 3).
-- **`grid_destroy(grid)`:** el grid desapareció (se cerró la ventana) → desmonto su
-  `TextDisplay`/tab y lo saco del registro. Contraparte de la creación.
-- **`msg_set_pos(grid, row, scrolled, ...)`:** define cuál es el message grid y dónde arranca;
-  con eso ubico y dimensiono la franja (y detecto crecimiento multilínea).
-- **`win_viewport_margins(grid, win, top, bottom, left, right)`:** márgenes internos de la
-  ventana (nuevo en 0.12). Por ahora lo acepto e ignoro; puede ajustar el cálculo de viewport
-  más adelante (Paso 4).
-- (Relacionado, Paso 2: **`win_hide(grid)`** = la ventana no se muestra ahora, p.ej. tabpage
-  inactiva; la mantengo marcada como oculta.)
+- **`win_pos(grid, win, startrow, startcol, width, height)`:** associates a `grid` with its
+  window (`win`) and its geometry. This is how I learn "grid 2 is the editor window" to bind it to
+  its tab/`TextDisplay`. The `win` is needed to focus/switch (Step 3).
+- **`grid_destroy(grid)`:** the grid is gone (its window was closed) → I tear down its
+  `TextDisplay`/tab and drop it from the registry. The counterpart to creation.
+- **`msg_set_pos(grid, row, scrolled, ...)`:** defines which grid is the message grid and where it
+  starts; with that I place and size the strip (and detect multi-line growth).
+- **`win_viewport_margins(grid, win, top, bottom, left, right)`:** the window's internal margins
+  (new in 0.12). For now I accept and ignore it; it may refine the viewport computation later
+  (Step 4).
+- (Related, Step 2: **`win_hide(grid)`** = the window is not shown right now, e.g. an inactive
+  tabpage; I keep it marked as hidden.)
 
-### Qué obtengo
+### What I get
 
-Edición de un archivo sobre la infraestructura multigrid, con los mensajes en la franja
-inferior (creciendo cuando hace falta). Prueba de que la plomería multigrid anda.
+Editing one file on top of the multigrid infrastructure, with messages in the bottom strip
+(growing when needed). Proof that the multigrid plumbing works.
 
-### Cómo pruebo
+### How I test
 
-- **Unit (estructura nueva):** el registro de grids — alta, lookup, baja, grid activo, distinguir
-  window vs message.
-- **Manual** (con `~/sistema/nvim-0.12.2`): abrir un archivo, editar, `:w` (ver "written" en la
-  franja), `/texto` (resaltado + mensaje de búsqueda), un `:echo` de varias líneas (ver la
-  franja crecer), `G`/`gg` (scroll).
+- **Unit (new structure):** the grid registry — add, lookup, remove, active grid, window vs
+  message.
+- **Manual** (with `~/sistema/nvim-0.12.2`): open a file, edit, `:w` (see "written" in the strip),
+  `/text` (highlight + search message), a multi-line `:echo` (see the strip grow), `G`/`gg`
+  (scroll).
 
 ---
 
-## Paso 2 — Varios archivos → varios tabs (el core)
+## Step 2 — Several files → several tabs (the core)
 
-**Qué toco:** `_feed_neovim_from_path`: el primer path con `:edit`, del segundo en adelante
-`:tabedit <path>`. Cada tabpage nueva = ventana nueva = **grid nuevo** (vi aparecer grid 4) →
-doy de alta en el registro un `TextDisplay` + tab de Qt para ese grid.
-- Ciclo de vida: al `tabedit` llega `grid_resize` + `win_pos` del grid nuevo y **`win_hide`
-  del anterior** (confirmado). Al cerrar, `win_close`/`grid_destroy`.
-- Nota de diseño (confirmada): **tab ↔ tabpage**. Solo la tabpage activa se dibuja; las otras
-  reciben `win_hide` y quedan "congeladas" hasta mostrarlas. Para un UI de tabs, perfecto.
+**What I touch:** `_feed_neovim_from_path`: the first path with `:edit`, from the second onward
+`:tabedit <path>`. Each new tabpage = new window = **new grid** (observed grid 4 appear) → I
+register a `TextDisplay` + a Qt tab for that grid.
+- Lifecycle: on `tabedit` we get `grid_resize` + `win_pos` for the new grid and **`win_hide` for
+  the previous one** (confirmed). On close, `win_close`/`grid_destroy`.
+- Design note (confirmed): **tab ↔ tabpage**. Only the active tabpage is drawn; the others get
+  `win_hide` and stay "frozen" until shown. For a tab UI, perfect.
 
-**Qué obtengo:** `python -m nysor ex1.txt ex2.txt` → **dos tabs**, cada uno con su contenido.
+**What I get:** `python -m nysor ex1.txt ex2.txt` → **two tabs**, each with its own content.
 
-**Cómo pruebo:**
-- Manual: abrir dos archivos, ver dos tabs con contenidos distintos.
-
----
-
-## Paso 3 — Switch de tab en los dos sentidos
-
-**Qué toco:**
-- Cambio de tab en Qt (`currentChanged`) → `nvim_set_current_tabpage` / `nvim_set_current_win`
-  (uso el `win` que aprendí de `win_pos`).
-- Autocmd `TabEnter`/`WinEnter` con `rpcnotify` → notificación tipo `current_changed` →
-  actualizo el tab activo de Qt sin re-disparar el evento (guard).
-- En Neovim, `tabnext`/`tabprevious` disparan `win_hide` del saliente + `win_pos` del entrante
-  (confirmado) — eso ya me sirve para saber qué grid quedó activo.
-
-**Qué obtengo:** clickear un tab mueve a Neovim, y `gt`/`gT` en Neovim mueve el tab de Qt.
-
-**Cómo pruebo:**
-- Manual: clickear tabs; usar `gt`/`gT`; verificar que coinciden.
+**How I test:**
+- Manual: open two files, see two tabs with different contents.
 
 ---
 
-## Paso 4 — Estado por tab (título, modificado, scrollbars)
+## Step 3 — Tab switching both ways
 
-**Qué toco:** hoy `state_buffer_is_modified`, `state_buffer_filepath`, scrollbars y
-`adjust_viewport` son globales. Los muevo al record del registro (**por grid/tab**). Los
-autocmds `BufModifiedSet`/`BufFilePost` pasan a informar qué ventana/buffer cambió. Menú
-`Save`/`Open` se habilita según el tab activo. (Acá caen varios `FIXME.90`.) Acá también puedo
-usar `win_viewport_margins` si hace falta para el cálculo fino del viewport.
+**What I touch:**
+- Tab change in Qt (`currentChanged`) → `nvim_set_current_tabpage` / `nvim_set_current_win` (using
+  the `win` learned from `win_pos`).
+- Autocmd `TabEnter`/`WinEnter` with `rpcnotify` → a `current_changed`-style notification → I
+  update the active Qt tab without re-triggering the event (guard).
+- In Neovim, `tabnext`/`tabprevious` fire `win_hide` for the outgoing one + `win_pos` for the
+  incoming one (confirmed) — that already tells me which grid became active.
 
-**Qué obtengo:** cada tab con su nombre de archivo, su indicador de modificado y su scroll
-independiente.
+**What I get:** clicking a tab moves Neovim, and `gt`/`gT` in Neovim moves the Qt tab.
 
-**Cómo pruebo:**
-- Manual: modificar un archivo → solo su tab marcado; scrollear cada uno por separado.
+**How I test:**
+- Manual: click tabs; use `gt`/`gT`; verify they match.
 
 ---
 
-## Paso 5 — Mouse con `grid_id` real
+## Step 4 — Per-tab state (title, modified, scrollbars)
 
-**Qué toco:** en `text_display.py` los eventos de mouse usan `grid = 0` hardcodeado
-(FIXME.90). Cada `TextDisplay` pasa a conocer su `grid_id` (del registro) y lo manda en
+**What I touch:** today `state_buffer_is_modified`, `state_buffer_filepath`, the scrollbars, and
+`adjust_viewport` are global. I move them into the registry record (**per grid/tab**). The
+autocmds `BufModifiedSet`/`BufFilePost` start reporting which window/buffer changed. The
+`Save`/`Open` menu is enabled based on the active tab. (Several `FIXME.90` land here.) I can also
+use `win_viewport_margins` here if needed for the fine viewport computation.
+
+**What I get:** each tab with its filename, its modified indicator, and its independent scroll.
+
+**How I test:**
+- Manual: modify one file → only its tab marked; scroll each one independently.
+
+---
+
+## Step 5 — Mouse with real `grid_id`
+
+**What I touch:** in `text_display.py` the mouse events use a hardcoded `grid = 0` (FIXME.90).
+Each `TextDisplay` gets to know its `grid_id` (from the registry) and sends it in
 `nvim_input_mouse`.
 
-**Qué obtengo:** clickear/seleccionar en un tab enfoca y opera sobre la ventana correcta.
+**What I get:** clicking/selecting in a tab focuses and operates on the right window.
 
-**Cómo pruebo:**
-- Manual: click en un tab posiciona el cursor ahí; drag selecciona ahí.
+**How I test:**
+- Manual: click in a tab positions the cursor there; drag selects there.
 
 ---
 
-## Paso 6 — `ext_cmdline`
+## Step 6 — `ext_cmdline`
 
-**Qué toco:** agrego `ext_cmdline: True` al attach. La command-line deja de dibujarse en el
-message grid y pasa a llegar por eventos (confirmado en 0.12.2):
-- `cmdline_show(content, pos, firstc, prompt, indent, level, hl_id)` — `content` es lista de
-  chunks `[hl_id, texto]`; `firstc` es `:`/`/`/`?`; `pos` es el cursor.
+**What I touch:** I add `ext_cmdline: True` to the attach. The command-line stops being drawn on
+the message grid and starts arriving through events (confirmed on 0.12.2):
+- `cmdline_show(content, pos, firstc, prompt, indent, level, hl_id)` — `content` is a list of
+  chunks `[hl_id, text]`; `firstc` is `:`/`/`/`?`; `pos` is the cursor.
 - `cmdline_pos(pos, level)`, `cmdline_hide(level, abort)`, `cmdline_special_char`,
   `cmdline_block_show/append/hide`.
-Renderizo eso en un widget de Qt propio (barra inferior). El **message grid sigue existiendo**
-para los `echo`/mensajes (confirmado: con ext_cmdline, `echo` sigue yendo al message grid), así
-que la franja del Paso 1 se queda; ext_cmdline solo saca la cmdline de ahí. Esto es exactamente
-"con ext_cmdline pero sin ext_messages".
+I render that in a dedicated Qt widget (bottom bar). The **message grid still exists** for
+`echo`/messages (confirmed: with ext_cmdline, `echo` still goes to the message grid), so the Step
+1 strip stays; ext_cmdline only takes the cmdline out of it. This is exactly "with ext_cmdline but
+without ext_messages".
 
-**Qué obtengo:** `:`, `/`, `?`, `:%s/...` en un widget de command-line de Qt, con cursor y
-posición.
+**What I get:** `:`, `/`, `?`, `:%s/...` in a Qt command-line widget, with cursor and position.
 
-**Cómo pruebo:**
-- Manual: `:w`, `/foo` con incsearch, `:%s/a/b/gc`; ver que aparece en la barra Qt y ya no en
-  la franja de mensajes.
-
----
-
-## Paso 7 — Detach de tab a ventana suelta (side-by-side en vivo)
-
-**Qué toco:** en Qt, reparento el widget del tab a una `QMainWindow`/`QDockWidget` flotante
-(+ re-attach). En Neovim, para que **los dos queden vivos a la vez**, convierto ese caso a
-**split en la misma tabpage** (ventanas coexistentes → los dos grids se dibujan). Acá **sí**
-entra `nvim_ui_try_resize_grid(grid, cols, rows)` para darle a cada grid su tamaño según el
-widget que lo contiene. Manejo la vuelta.
-
-**Qué obtengo:** sacar un buffer a su propia ventana del SO y editar los dos en vivo, lado a
-lado.
-
-**Cómo pruebo:**
-- Manual: detachear un tab, editar en ambas ventanas simultáneamente, re-attachear.
+**How I test:**
+- Manual: `:w`, `/foo` with incsearch, `:%s/a/b/gc`; see it show in the Qt bar and no longer in
+  the message strip.
 
 ---
 
-## Notas transversales
+## Step 7 — Detach a tab into a separate window (live side-by-side)
 
-- **Orden y despliegue:** los Pasos 1–4 ya dan la feature pedida ("abrir varios, tabs,
-  switchear"). El 5 es higiene necesaria para multi-ventana. El 6 (ext_cmdline) y el 7
-  (detach) son mejoras encima de una base sólida.
-- **Floating windows / popup de completado:** aparecen como grids transitorios vía
-  `win_float_pos` (lo vi con `:edit foo<Tab>`). No se dibujan en la base; quedan como paso
-  futuro (van bien junto con el manejo de floats del Paso 7).
-- **Menú "New":** el `FIXME.90` de `MainMenu` pide un "New" para multibuffer; se agrega
-  naturalmente en el Paso 2 o 4.
-- **`ext_messages` queda fuera de alcance** (mucho más trabajo y código); es un paso futuro
-  opcional, independiente de todo lo anterior.
+**What I touch:** in Qt, I reparent the tab's widget into a floating `QMainWindow`/`QDockWidget`
+(+ re-attach). In Neovim, so that **both stay live at once**, I turn that case into a **split in
+the same tabpage** (coexisting windows → both grids get drawn). Here `nvim_ui_try_resize_grid(grid,
+cols, rows)` **does** come into play, to give each grid the size of the widget that holds it. I
+handle the round trip back.
+
+**What I get:** pull a buffer into its own OS window and edit both live, side by side.
+
+**How I test:**
+- Manual: detach a tab, edit in both windows simultaneously, re-attach.
+
+---
+
+## Cross-cutting notes
+
+- **Ordering and delivery:** Steps 1–4 already give the requested feature ("open several, tabs,
+  switch"). Step 5 is hygiene needed for multi-window. Step 6 (ext_cmdline) and Step 7 (detach)
+  are improvements on top of a solid base.
+- **Floating windows / completion popup:** they appear as transient grids via `win_float_pos`
+  (observed with `:edit foo<Tab>`). Not drawn in the base; left as a future step (they fit well
+  together with the floats handling of Step 7).
+- **"New" menu:** the `FIXME.90` in `MainMenu` asks for a "New" option for multibuffer; it is
+  added naturally in Step 2 or 4.
+- **`ext_messages` is out of scope** (a lot more work and code); it is an optional future step,
+  independent of everything above.

@@ -97,10 +97,13 @@ class NvimNotifications:
 
     def __init__(self, main_window):
         self.main_window = main_window
-        self.text_display = None  # editor (window grid) display; set before first usage
+        self.window_displays = {}  # grid_id -> TextDisplay, one per Neovim window grid
         self.message_display = None  # bottom strip (message grid) display; set before use
         self.statusline_display = None  # strip rendering the status row(s) of the global grid
         self.options = {}
+        # last font and cursor-mode info seen, applied to editor displays created later
+        self._font = None
+        self._mode_info = None
 
         # this two currently work "in tandem", we may want to unify them under the same structure
         # in the future
@@ -122,7 +125,23 @@ class NvimNotifications:
             return self.statusline_display
         if kind == GridRegistry.GRID_MESSAGE:
             return self.message_display
-        return self.text_display
+        return self._ensure_editor(grid_id)
+
+    def _ensure_editor(self, grid_id):
+        """Return the editor display for a window grid, creating its tab the first time."""
+        display = self.window_displays.get(grid_id)
+        if display is None:
+            display = self.main_window.build_editor_tab()
+            self.window_displays[grid_id] = display
+            # initialize a freshly created display with what we already know
+            size = self._grid_sizes.get(grid_id)
+            if size is not None:
+                display.resize_view(size)
+            if self._font is not None:
+                display.set_font(*self._font)
+            if self._mode_info is not None:
+                display.change_mode(self._mode_info)
+        return display
 
     def _layout_message_strip(self):
         """Lay out the message strip from the message grid's own size and position.
@@ -215,7 +234,8 @@ class NvimNotifications:
 
     def _n_redraw__flush(self, _):
         """Flush all changes to the grids."""
-        self.text_display.flush()
+        for display in self.window_displays.values():
+            display.flush()
         if self.message_display is not None:
             self.message_display.flush()
         if self.statusline_display is not None:
@@ -250,7 +270,10 @@ class NvimNotifications:
         self._grid_sizes[grid_id] = (width, height)
         kind = self.grids.kind_of(grid_id)
         if kind == GridRegistry.GRID_WINDOW:
-            self.text_display.resize_view((width, height))
+            # a not-yet-created window keeps its size in _grid_sizes; _ensure_editor applies it
+            display = self.window_displays.get(grid_id)
+            if display is not None:
+                display.resize_view((width, height))
         elif kind == GridRegistry.GRID_MESSAGE:
             self._layout_message_strip()
         elif kind == GridRegistry.GRID_GLOBAL:
@@ -271,6 +294,9 @@ class NvimNotifications:
         for (grid_id,) in args:
             self.grids.forget(grid_id)
             self._window_bottoms.pop(grid_id, None)
+            display = self.window_displays.pop(grid_id, None)
+            if display is not None:
+                self.main_window.destroy_editor_tab(display)
 
     def _n_redraw__win_pos(self, *args):
         """Associate window grids with their Neovim window handles and geometry."""
@@ -280,6 +306,10 @@ class NvimNotifications:
             # statusline strip knows which global rows to render (recomputed, so it follows
             # both growing and shrinking)
             self._window_bottoms[grid_id] = startrow + height
+            # ensure the window has its editor tab, and make it the active one (this is how
+            # opening a file in a new tabpage switches the GUI to it)
+            display = self._ensure_editor(grid_id)
+            self.main_window.set_active_editor(display)
         self._layout_statusline_strip()
 
     def _n_redraw__win_hide(self, *args):
@@ -334,7 +364,9 @@ class NvimNotifications:
         mode, mode_idx = args
         # we ignore the mode idx as we stored in the modes in a dict using the name
         mode_info = self.structs["mode-info"][mode]
-        self.text_display.change_mode(mode_info)
+        self._mode_info = mode_info  # remember it for editor displays created later
+        for display in self.window_displays.values():
+            display.change_mode(mode_info)
 
     def _n_redraw__mode_info_set(self, args):
         """Information about cursor mode."""
@@ -367,7 +399,9 @@ class NvimNotifications:
             name, size = options["guifont"].split(":")
             assert size[0] == "h"
             size = float(size[1:])
-            self.text_display.set_font(name, size)
+            self._font = (name, size)  # remember it for editor displays created later
+            for display in self.window_displays.values():
+                display.set_font(name, size)
             if self.message_display is not None:
                 self.message_display.set_font(name, size)
             if self.statusline_display is not None:
@@ -385,9 +419,9 @@ class NvimNotifications:
         self.main_window.setWindowTitle(title)
 
     def _n_redraw__win_viewport(self, args):
-        """Information for the GUI viewport."""
-        grid, objinfo, topline, botline, curline, curcol, line_count, scroll_delta = args
-        # FIXME.90: ignore grid and objinfo so far, need to revisit this when multiwindow
-
+        """Information for the GUI viewport; routed to the pane that owns the window grid."""
+        grid, _win, topline, botline, curline, curcol, line_count, scroll_delta = args
         # Note: can't find use to scroll_delta (maybe for smooth scrollbar?)
-        call_async(self.main_window.adjust_viewport, topline, botline, line_count, curcol)
+        display = self.window_displays.get(grid)
+        if display is not None:
+            call_async(display.pane.adjust_viewport, topline, botline, line_count, curcol)

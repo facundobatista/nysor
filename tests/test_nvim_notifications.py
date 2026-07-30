@@ -14,10 +14,14 @@ from nysor.nvim_notifications import DynamicCache, GridRegistry, NvimNotificatio
 
 @pytest.fixture
 def notif(mocker):
-    """NvimNotifications with mocked main_window, displays, and call_async."""
+    """NvimNotifications with mocked main_window, displays, and call_async.
+
+    Grid 2 is pre-registered as a window, so its display is `notif._editor`.
+    """
     mocker.patch("nysor.nvim_notifications.call_async")
     nn = NvimNotifications(main_window=MagicMock())
-    nn.text_display = MagicMock()
+    nn._editor = MagicMock()
+    nn.window_displays = {2: nn._editor}
     nn.message_display = MagicMock()
     nn.statusline_display = MagicMock()
     return nn
@@ -101,7 +105,7 @@ class TestNvimNotificationsRedraw:
 
     def test_exception_is_caught_and_execution_continues(self, notif, logs):
         """Exception in one submethod is logged; remaining submethods still run."""
-        notif.text_display.flush.side_effect = RuntimeError("boom")
+        notif._editor.flush.side_effect = RuntimeError("boom")
         notif._h__redraw(["flush", None], ["set_title", ["Title"]])
         notif.main_window.setWindowTitle.assert_called_once_with("Title")
         assert "Crash" in logs.error
@@ -109,7 +113,7 @@ class TestNvimNotificationsRedraw:
     def test_multiple_submethods_all_dispatched(self, notif):
         """All submethods in one _h__redraw() call are dispatched in order."""
         notif._h__redraw(["flush", None], ["flush", None])
-        assert notif.text_display.flush.call_count == 2
+        assert notif._editor.flush.call_count == 2
 
 
 class TestNvimNotificationsHandlers:
@@ -138,28 +142,28 @@ class TestNvimNotificationsRedrawHandlers:
     def test_flush(self, notif):
         """Calls text_display.flush()."""
         notif._n_redraw__flush(None)
-        notif.text_display.flush.assert_called_once()
+        notif._editor.flush.assert_called_once()
 
     def test_grid_clear(self, notif):
         """A window grid routes clear() to the editor display."""
         notif._n_redraw__grid_clear([2])
-        notif.text_display.clear.assert_called_once()
+        notif._editor.clear.assert_called_once()
 
     def test_grid_clear_global_grid_routes_to_statusline(self, notif):
         """The global grid (1) is rendered by the statusline strip, not the editor."""
         notif._n_redraw__grid_clear([1])
         notif.statusline_display.clear.assert_called_once()
-        notif.text_display.clear.assert_not_called()
+        notif._editor.clear.assert_not_called()
 
     def test_grid_cursor_goto(self, notif):
         """A window grid routes set_cursor(row, col) to the editor display."""
         notif._n_redraw__grid_cursor_goto([2, 5, 10])
-        notif.text_display.set_cursor.assert_called_once_with(5, 10)
+        notif._editor.set_cursor.assert_called_once_with(5, 10)
 
     def test_grid_line_single(self, notif):
         """Calls text_display.write_grid for a single line item."""
         notif._n_redraw__grid_line([2, 3, 0, [["a", 1]], False])
-        notif.text_display.write_grid.assert_called_once_with(3, 0, [["a", 1]])
+        notif._editor.write_grid.assert_called_once_with(3, 0, [["a", 1]])
 
     def test_grid_line_multiple(self, notif):
         """Calls text_display.write_grid once per line item."""
@@ -167,17 +171,17 @@ class TestNvimNotificationsRedrawHandlers:
             [2, 3, 0, [["a", 1]], False],
             [2, 4, 2, [["b", 1]], False],
         )
-        assert notif.text_display.write_grid.call_count == 2
+        assert notif._editor.write_grid.call_count == 2
 
     def test_grid_resize(self, notif):
         """A window grid routes resize_view((width, height)) to the editor display."""
         notif._n_redraw__grid_resize([2, 80, 24])
-        notif.text_display.resize_view.assert_called_once_with((80, 24))
+        notif._editor.resize_view.assert_called_once_with((80, 24))
 
     def test_grid_scroll(self, notif):
         """Calls text_display.scroll with the correct row and column arguments."""
         notif._n_redraw__grid_scroll([2, 0, 24, 0, 80, 3, 0])
-        notif.text_display.scroll.assert_called_once_with((0, 24, 3), (0, 80, 0))
+        notif._editor.scroll.assert_called_once_with((0, 24, 3), (0, 80, 0))
 
     def test_hl_attr_define(self, notif, mocker):
         """Stores highlight attributes in structs and cleans the cache."""
@@ -198,7 +202,7 @@ class TestNvimNotificationsRedrawHandlers:
         """Looks up mode info in structs and calls text_display.change_mode."""
         notif.structs["mode-info"] = {"normal": {"cursor_shape": "block"}}
         notif._n_redraw__mode_change(["normal", 0])
-        notif.text_display.change_mode.assert_called_once_with({"cursor_shape": "block"})
+        notif._editor.change_mode.assert_called_once_with({"cursor_shape": "block"})
 
     def test_mode_info_set(self, notif, mocker):
         """Populates structs['mode-info'] stripping name/short_name, and cleans cache."""
@@ -220,12 +224,12 @@ class TestNvimNotificationsRedrawHandlers:
         """Updates options dict without calling text_display.set_font."""
         notif._n_redraw__option_set(["arabicshape", True])
         assert notif.options["arabicshape"] is True
-        notif.text_display.set_font.assert_not_called()
+        notif._editor.set_font.assert_not_called()
 
     def test_option_set_with_guifont(self, notif):
         """Updates options and calls text_display.set_font(name, size)."""
         notif._n_redraw__option_set(["guifont", "Monospace:h14"])
-        notif.text_display.set_font.assert_called_once_with("Monospace", 14.0)
+        notif._editor.set_font.assert_called_once_with("Monospace", 14.0)
 
     def test_set_icon_empty_no_warning(self, notif, logs):
         """set_icon with an empty icon does not log a warning."""
@@ -243,10 +247,10 @@ class TestNvimNotificationsRedrawHandlers:
         notif.main_window.setWindowTitle.assert_called_once_with("My Editor")
 
     def test_win_viewport(self, notif):
-        """Calls call_async with adjust_viewport and the correct arguments."""
+        """Routes adjust_viewport to the pane of the window grid, with the right arguments."""
         notif._n_redraw__win_viewport([2, {}, 10, 50, 25, 5, 100, 3])
         nvim_notifications.call_async.assert_called_once_with(
-            notif.main_window.adjust_viewport, 10, 50, 100, 5)
+            notif._editor.pane.adjust_viewport, 10, 50, 100, 5)
 
 
 class TestGridRegistry:
