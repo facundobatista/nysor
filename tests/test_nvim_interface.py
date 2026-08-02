@@ -162,20 +162,20 @@ async def nvim_with_api(mocker, sock_path):
 class TestExtHook:
 
     def test_basic(self, mocker):
-        """Decode type and ID from big-endian bytes."""
+        """Decode type and the msgpack-encoded integer id from the payload."""
         mocker.patch.dict(_EXT_TYPE_CODES, {7: "Buffer"})
-        assert ext_hook(7, b'\x00\x01') == ["Buffer", 1]
+        assert ext_hook(7, msgpack.packb(1)) == ["Buffer", 1]
 
     def test_different_type_codes(self, mocker):
         """Different type codes map to the correct object type names."""
         mocker.patch.dict(_EXT_TYPE_CODES, {1: "Window", 2: "Tabpage"})
-        assert ext_hook(1, b'\x00\x05') == ["Window", 5]
-        assert ext_hook(2, b'\x00\x0a') == ["Tabpage", 10]
+        assert ext_hook(1, msgpack.packb(5)) == ["Window", 5]
+        assert ext_hook(2, msgpack.packb(10)) == ["Tabpage", 10]
 
     def test_multi_byte_id(self, mocker):
-        """Multi-byte big-endian IDs are decoded correctly."""
+        """Multi-byte ids (msgpack uint16/uint32) are decoded correctly."""
         mocker.patch.dict(_EXT_TYPE_CODES, {0: "Buffer"})
-        assert ext_hook(0, b'\x01\x00') == ["Buffer", 256]
+        assert ext_hook(0, msgpack.packb(1000)) == ["Buffer", 1000]  # b'\xcd\x03\xe8'
 
 
 class TestGetUniqueSockPath:

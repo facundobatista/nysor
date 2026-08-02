@@ -45,8 +45,9 @@ def ext_hook(code, data):
     # code is the type of object
     obj_type = _EXT_TYPE_CODES[code]
 
-    # Neovim encodes IDs as uint16 or uint32
-    obj_id = int.from_bytes(data, byteorder='big')
+    # the payload is the msgpack-encoded integer handle (e.g. b'\xcd\x03\xe8' is 1000, not a raw
+    # big-endian int); it must match the plain window id Neovim sends elsewhere
+    obj_id = msgpack.unpackb(data)
 
     return [obj_type, obj_id]
 

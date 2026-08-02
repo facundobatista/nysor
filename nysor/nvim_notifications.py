@@ -63,7 +63,15 @@ class GridRegistry:
 
     def __init__(self):
         self.message_grid = None
-        self.windows = {}  # grid_id -> Neovim window handle
+        self._win_by_grid = {}  # grid_id -> Neovim window handle (for e.g. set_current_win)
+        self._grid_by_win = {}  # window id -> grid_id (reverse index, O(1) lookup by window)
+
+    @staticmethod
+    def win_id(win_handle):
+        """Normalize a window handle (decoded as ['Window', id]) or a raw id to its numeric id."""
+        if isinstance(win_handle, (list, tuple)):
+            return win_handle[-1]
+        return win_handle
 
     def set_message_grid(self, grid_id):
         """Record which grid is the message grid."""
@@ -71,11 +79,22 @@ class GridRegistry:
 
     def register_window(self, grid_id, win_handle):
         """Associate a window grid with its Neovim window handle."""
-        self.windows[grid_id] = win_handle
+        self._win_by_grid[grid_id] = win_handle
+        self._grid_by_win[self.win_id(win_handle)] = grid_id
+
+    def get_grid_by_win(self, win):
+        """Return the grid that shows the given Neovim window (id or handle), or None."""
+        return self._grid_by_win.get(self.win_id(win))
+
+    def window_handle(self, grid_id):
+        """Return the Neovim window handle bound to a grid, or None."""
+        return self._win_by_grid.get(grid_id)
 
     def forget(self, grid_id):
         """Drop a grid that was destroyed."""
-        self.windows.pop(grid_id, None)
+        win_handle = self._win_by_grid.pop(grid_id, None)
+        if win_handle is not None:
+            self._grid_by_win.pop(self.win_id(win_handle), None)
         if grid_id == self.message_grid:
             self.message_grid = None
 
@@ -206,27 +225,12 @@ class NvimNotifications:
         `win` is the Neovim window id where it happened; we use it to label the right tab. If the
         window's grid is not known yet (win_pos not received), we stash it and apply it then.
         """
-        grid = self._grid_for_win(win)
+        grid = self.grids.get_grid_by_win(win)
         display = self.window_displays.get(grid) if grid is not None else None
         if display is not None:
             self.main_window.set_tab_label(display, filepath)
         else:
-            self._pending_labels[win] = filepath
-
-    @staticmethod
-    def _win_id(win_handle):
-        """Extract the numeric window id from a decoded Neovim window handle."""
-        # handles arrive decoded by ext_hook as ['Window', id]
-        if isinstance(win_handle, (list, tuple)):
-            return win_handle[-1]
-        return win_handle
-
-    def _grid_for_win(self, win_id):
-        """Return the grid whose window has the given Neovim window id, or None."""
-        for grid, handle in self.grids.windows.items():
-            if self._win_id(handle) == win_id:
-                return grid
-        return None
+            self._pending_labels[GridRegistry.win_id(win)] = filepath
 
     def handler(self, method: str, parameters: list[Any]):
         """Handle all notifications from Neovim."""
@@ -325,7 +329,7 @@ class NvimNotifications:
             display = self._ensure_editor(grid_id)
             self.main_window.set_active_editor(display)
             # if a filepath arrived before this window was known, apply it now as the tab label
-            win_id = self._win_id(win)
+            win_id = GridRegistry.win_id(win)
             if win_id in self._pending_labels:
                 self.main_window.set_tab_label(display, self._pending_labels.pop(win_id))
         self._layout_statusline_strip()
