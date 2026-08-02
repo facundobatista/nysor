@@ -86,10 +86,6 @@ class GridRegistry:
         """Return the grid that shows the given Neovim window (id or handle), or None."""
         return self._grid_by_win.get(self.win_id(win))
 
-    def window_handle(self, grid_id):
-        """Return the Neovim window handle bound to a grid, or None."""
-        return self._win_by_grid.get(grid_id)
-
     def forget(self, grid_id):
         """Drop a grid that was destroyed."""
         win_handle = self._win_by_grid.pop(grid_id, None)

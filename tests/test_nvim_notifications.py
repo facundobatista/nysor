@@ -277,12 +277,6 @@ class TestGridRegistry:
         assert reg.kind_of(3) == "message"
         assert reg.kind_of(2) == "window"
 
-    def test_register_window_stores_handle(self):
-        """register_window keeps the Neovim window handle, retrievable by grid."""
-        reg = GridRegistry()
-        reg.register_window(2, ["Window", 5])
-        assert reg.window_handle(2) == ["Window", 5]
-
     def test_get_grid_by_win_direct_lookup(self):
         """get_grid_by_win resolves the grid from a window id or handle without iterating."""
         reg = GridRegistry()
@@ -301,9 +295,8 @@ class TestGridRegistry:
         assert reg.message_grid is None
 
     def test_forget_window(self):
-        """Forgetting a window grid drops both its handle and the reverse lookup."""
+        """Forgetting a window grid drops its reverse lookup."""
         reg = GridRegistry()
         reg.register_window(2, ["Window", 5])
         reg.forget(2)
-        assert reg.window_handle(2) is None
         assert reg.get_grid_by_win(5) is None
