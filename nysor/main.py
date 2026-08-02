@@ -495,6 +495,11 @@ class MainApp(QMainWindow):
         self.tabs.addTab(self._unclaimed_pane, "[No Name]")
         self.text_display = self._unclaimed_pane.text_display
 
+        # editor-wide font and cursor mode: owned here (the editor layer), remembered so tabs
+        # created later start with the right values
+        self._editor_font = None
+        self._editor_mode = None
+
         # the statusline strip: a display-only view of the global grid's status row(s) (mode,
         # file, position, etc.), which live on grid 1 under multigrid; sits above the messages
         self.statusline_display = self.nvim_notifs.statusline_display = TextDisplay(
@@ -523,18 +528,41 @@ class MainApp(QMainWindow):
 
         self.text_display.setFocus()
 
-    def set_buffer_state(self, is_modified=None, filepath=None):
-        """Set the state state."""
-        logger.debug("Set buffer state; is_modified={} filepath={}", is_modified, filepath)
+    def set_buffer_state(self, is_modified=None):
+        """Set the (still global) modified state and the related menu entries."""
+        logger.debug("Set buffer state; is_modified={}", is_modified)
         # FIXME.90 -- modified state is still global; make it per-tab in a later step
         if is_modified is not None:
             self.state_buffer_is_modified = is_modified
             self._menu.actions["file__save"].setEnabled(is_modified)
             self._menu.actions["file__open"].setEnabled(not is_modified)
-        if filepath is not None:
-            self.state_buffer_filepath = filepath
-            label = os.path.basename(filepath) if filepath else "[No Name]"
-            self.tabs.setTabText(self.tabs.currentIndex(), label)
+
+    def set_tab_label(self, display, filepath):
+        """Set the label of the tab holding the given editor display, from its filepath."""
+        label = os.path.basename(filepath) if filepath else "[No Name]"
+        index = self.tabs.indexOf(display.pane)
+        if index != -1:
+            self.tabs.setTabText(index, label)
+        # FIXME.90: swarm path discovery is still global; track the last labeled path for now
+        self.state_buffer_filepath = filepath
+
+    def _editor_displays(self):
+        """Return every editor display currently held in a tab."""
+        return [self.tabs.widget(i).text_display for i in range(self.tabs.count())]
+
+    def set_editor_font(self, name, size):
+        """Set the font for all editor displays and the strips, and remember it for new tabs."""
+        self._editor_font = (name, size)
+        for display in self._editor_displays():
+            display.set_font(name, size)
+        self.message_display.set_font(name, size)
+        self.statusline_display.set_font(name, size)
+
+    def set_editor_mode(self, mode_info):
+        """Set the cursor mode for all editor displays, and remember it for new tabs."""
+        self._editor_mode = mode_info
+        for display in self._editor_displays():
+            display.change_mode(mode_info)
 
     def build_editor_tab(self):
         """Create (or reuse the initial) editor pane and its tab, returning its display."""
@@ -544,6 +572,11 @@ class MainApp(QMainWindow):
         else:
             pane = EditorPane(self)
             self.tabs.addTab(pane, "[No Name]")
+        # a freshly created display starts with the current editor-wide font and cursor mode
+        if self._editor_font is not None:
+            pane.text_display.set_font(*self._editor_font)
+        if self._editor_mode is not None:
+            pane.text_display.change_mode(self._editor_mode)
         return pane.text_display
 
     def destroy_editor_tab(self, display):
@@ -594,13 +627,14 @@ class MainApp(QMainWindow):
         # own tabline
         await self.nvi.call("nvim_set_option_value", "showtabline", 0, {})
 
-        # subscribe to the buffer file change (will comeback as a 'set_buffer_state' call)
-        # FIXME.90 -- this needs to evolve to multibuffers
+        # subscribe to the buffer file change; we send the current window id so the GUI can label
+        # the right tab (comes back as a 'filepath_changed' notification)
         _code = f"""
             vim.api.nvim_create_autocmd({{'BufFilePost', 'BufReadPost'}}, {{
                 callback = function()
+                    local win = vim.api.nvim_get_current_win()
                     local name = vim.api.nvim_buf_get_name(0)
-                    vim.rpcnotify({self.nvi.channel_id}, 'filepath_changed', name)
+                    vim.rpcnotify({self.nvi.channel_id}, 'filepath_changed', win, name)
                 end
             }})
         """

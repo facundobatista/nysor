@@ -123,10 +123,17 @@ class TestNvimNotificationsHandlers:
         notif._h__modified_changed(True)
         notif.main_window.set_buffer_state.assert_called_once_with(is_modified=True)
 
-    def test_filepath_changed(self, notif):
-        """Calls main_window.set_buffer_state with filepath."""
-        notif._h__filepath_changed("/some/path")
-        notif.main_window.set_buffer_state.assert_called_once_with(filepath="/some/path")
+    def test_filepath_changed_labels_known_window(self, notif):
+        """A filepath for a known window labels that window's tab."""
+        notif.grids.register_window(2, ["Window", 5])  # grid 2 already has notif._editor
+        notif._h__filepath_changed(5, "/some/path")
+        notif.main_window.set_tab_label.assert_called_once_with(notif._editor, "/some/path")
+
+    def test_filepath_changed_pending_for_unknown_window(self, notif):
+        """A filepath for a not-yet-known window is stashed until its win_pos arrives."""
+        notif._h__filepath_changed(99, "/some/path")
+        notif.main_window.set_tab_label.assert_not_called()
+        assert notif._pending_labels[99] == "/some/path"
 
 
 class TestNvimNotificationsRedrawHandlers:
@@ -199,10 +206,10 @@ class TestNvimNotificationsRedrawHandlers:
         mock_clean.assert_called_once_with("hl-groups")
 
     def test_mode_change(self, notif):
-        """Looks up mode info in structs and calls text_display.change_mode."""
+        """Looks up mode info in structs and hands it to the editor layer (main_window)."""
         notif.structs["mode-info"] = {"normal": {"cursor_shape": "block"}}
         notif._n_redraw__mode_change(["normal", 0])
-        notif._editor.change_mode.assert_called_once_with({"cursor_shape": "block"})
+        notif.main_window.set_editor_mode.assert_called_once_with({"cursor_shape": "block"})
 
     def test_mode_info_set(self, notif, mocker):
         """Populates structs['mode-info'] stripping name/short_name, and cleans cache."""
@@ -221,15 +228,15 @@ class TestNvimNotificationsRedrawHandlers:
         notif._n_redraw__mouse_off(None)
 
     def test_option_set_without_guifont(self, notif):
-        """Updates options dict without calling text_display.set_font."""
+        """Updates options dict without touching the editor font."""
         notif._n_redraw__option_set(["arabicshape", True])
         assert notif.options["arabicshape"] is True
-        notif._editor.set_font.assert_not_called()
+        notif.main_window.set_editor_font.assert_not_called()
 
     def test_option_set_with_guifont(self, notif):
-        """Updates options and calls text_display.set_font(name, size)."""
+        """Updates options and hands the font to the editor layer (main_window)."""
         notif._n_redraw__option_set(["guifont", "Monospace:h14"])
-        notif._editor.set_font.assert_called_once_with("Monospace", 14.0)
+        notif.main_window.set_editor_font.assert_called_once_with("Monospace", 14.0)
 
     def test_set_icon_empty_no_warning(self, notif, logs):
         """set_icon with an empty icon does not log a warning."""

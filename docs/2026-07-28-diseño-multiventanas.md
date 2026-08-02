@@ -213,18 +213,39 @@ register a `TextDisplay` + a Qt tab for that grid.
 
 ---
 
-## Step 4 — Per-tab state (title, modified, scrollbars)
+## Step 4 — Per-tab state (title, modified, scrollbars) + tab/buffer lifecycle
 
-**What I touch:** today `state_buffer_is_modified`, `state_buffer_filepath`, the scrollbars, and
-`adjust_viewport` are global. I move them into the registry record (**per grid/tab**). The
-autocmds `BufModifiedSet`/`BufFilePost` start reporting which window/buffer changed. The
-`Save`/`Open` menu is enabled based on the active tab. (Several `FIXME.90` land here.) I can also
-use `win_viewport_margins` here if needed for the fine viewport computation.
+**What I touch:** today `state_buffer_is_modified` is global (and the `Save`/`Open` menu keys off
+it). I move it per grid/tab, keyed by the window/buffer that changed. (Per-tab scroll bars and
+per-window tab titles were already pulled forward into Step 2.) I can also use
+`win_viewport_margins` here if needed for the fine viewport computation.
 
-**What I get:** each tab with its filename, its modified indicator, and its independent scroll.
+**Tab ↔ buffer lifecycle (decided).** In the GUI we enforce the invariant *"every listed buffer
+has a tab"*: when Neovim closes a window (`grid_destroy`) and a buffer is left **orphaned** — i.e.
+a listed buffer with **0 windows** (verified via `getbufinfo`) — we react (a "counter-attack" to
+Neovim's `:close`, which keeps the buffer loaded but hidden):
+- not modified → `nvim_buf_delete` it (clean up, no prompt);
+- modified → prompt **Save / Discard / Cancel** (same feel as closing from the GUI):
+  - Save → write the buffer, then delete it;
+  - Discard → `bwipeout!`/force delete;
+  - Cancel → **reopen** the buffer in a fresh tab (`:tab sbuffer`); note the original window is
+    already gone, so this has a small flicker and resets the cursor position.
+
+Detecting orphans by "0 windows" makes the same-buffer-in-two-tabs case safe automatically (that
+buffer still has a window, so it is not orphaned). Guards:
+- **Suppress during app shutdown** (`_closing` state): `:qall`/Exit already prompt about unsaved
+  changes, so the counter-attack must not double-prompt while the app is quitting.
+- `:q` already warns *before* closing (E37), so it never orphans; the counter-attack mostly
+  covers `:close`/`:hide`/`:e`-that-replaces.
+
+This also pairs with a future GUI "X" close button on tabs (same lifecycle logic).
+
+**What I get:** each tab with its filename, its modified indicator, independent scroll, and a
+close that never silently hides an unsaved buffer.
 
 **How I test:**
-- Manual: modify one file → only its tab marked; scroll each one independently.
+- Manual: modify one file → only its tab marked; scroll each one independently; `:close` a
+  modified tab → prompt; Cancel reopens it; a clean `:close` just removes the tab.
 
 ---
 

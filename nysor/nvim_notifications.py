@@ -101,9 +101,6 @@ class NvimNotifications:
         self.message_display = None  # bottom strip (message grid) display; set before use
         self.statusline_display = None  # strip rendering the status row(s) of the global grid
         self.options = {}
-        # last font and cursor-mode info seen, applied to editor displays created later
-        self._font = None
-        self._mode_info = None
 
         # this two currently work "in tandem", we may want to unify them under the same structure
         # in the future
@@ -114,7 +111,8 @@ class NvimNotifications:
         self.grids = GridRegistry()
         self._grid_sizes = {}  # grid_id -> (width, height) as last reported by grid_resize
         self._msg_row = None  # top row of the message grid within the global grid
-        self._window_bottoms = {}  # grid_id -> first global row below that window
+        # filepaths that arrived before their window grid was known (win_id -> filepath)
+        self._pending_labels = {}
 
     def _display_for(self, grid_id):
         """Return the display that renders the given grid, or None if not rendered."""
@@ -128,19 +126,18 @@ class NvimNotifications:
         return self._ensure_editor(grid_id)
 
     def _ensure_editor(self, grid_id):
-        """Return the editor display for a window grid, creating its tab the first time."""
+        """Return the editor display for a window grid, creating its tab the first time.
+
+        The editor layer (main_window) owns font/cursor-mode and applies them to the freshly
+        built display; here we only apply what is genuinely notification data: the grid size.
+        """
         display = self.window_displays.get(grid_id)
         if display is None:
             display = self.main_window.build_editor_tab()
             self.window_displays[grid_id] = display
-            # initialize a freshly created display with what we already know
             size = self._grid_sizes.get(grid_id)
             if size is not None:
                 display.resize_view(size)
-            if self._font is not None:
-                display.set_font(*self._font)
-            if self._mode_info is not None:
-                display.change_mode(self._mode_info)
         return display
 
     def _layout_message_strip(self):
@@ -162,22 +159,20 @@ class NvimNotifications:
         self.message_display.updateGeometry()
 
     def _layout_statusline_strip(self):
-        """Lay out the statusline strip: the global-grid rows between windows and messages.
+        """Lay out the statusline strip: the single global-grid row just above the messages.
 
-        Width is exactly the global grid's width (as Neovim reported it). The statusline sits
-        below the lowest window and above the message area, so we render that slice via a view
-        origin at the window bottom.
+        Width is exactly the global grid's width (as Neovim reported it). The statusline sits one
+        row above the message area, so its row is `msg_row - 1` (independent of window geometry;
+        this is set early, from msg_set_pos/grid_resize, before the content arrives).
         """
-        if self.statusline_display is None or not self._window_bottoms or self._msg_row is None:
+        if self.statusline_display is None or self._msg_row is None:
             return
         size = self._grid_sizes.get(GridRegistry.GLOBAL_GRID_ID)
         if size is None:
             return
         width, _ = size
-        top = max(self._window_bottoms.values())
-        rows = max(1, self._msg_row - top)
-        self.statusline_display.view_origin_row = top
-        self.statusline_display.resize_view((width, rows))
+        self.statusline_display.view_origin_row = max(0, self._msg_row - 1)
+        self.statusline_display.resize_view((width, 1))
         self.statusline_display.updateGeometry()
 
     def _h__redraw(self, *parameters: tuple[Any]):
@@ -205,9 +200,33 @@ class NvimNotifications:
         """Handle the notification when the buffer starts/stop having changes."""
         self.main_window.set_buffer_state(is_modified=is_modified)
 
-    def _h__filepath_changed(self, filepath: str):
-        """Handle the notification when the buffer has a file associated or not."""
-        self.main_window.set_buffer_state(filepath=filepath)
+    def _h__filepath_changed(self, win, filepath: str):
+        """Handle the notification when a window's buffer gets (or changes) its file.
+
+        `win` is the Neovim window id where it happened; we use it to label the right tab. If the
+        window's grid is not known yet (win_pos not received), we stash it and apply it then.
+        """
+        grid = self._grid_for_win(win)
+        display = self.window_displays.get(grid) if grid is not None else None
+        if display is not None:
+            self.main_window.set_tab_label(display, filepath)
+        else:
+            self._pending_labels[win] = filepath
+
+    @staticmethod
+    def _win_id(win_handle):
+        """Extract the numeric window id from a decoded Neovim window handle."""
+        # handles arrive decoded by ext_hook as ['Window', id]
+        if isinstance(win_handle, (list, tuple)):
+            return win_handle[-1]
+        return win_handle
+
+    def _grid_for_win(self, win_id):
+        """Return the grid whose window has the given Neovim window id, or None."""
+        for grid, handle in self.grids.windows.items():
+            if self._win_id(handle) == win_id:
+                return grid
+        return None
 
     def handler(self, method: str, parameters: list[Any]):
         """Handle all notifications from Neovim."""
@@ -293,23 +312,22 @@ class NvimNotifications:
         """Drop grids that Neovim destroyed (their windows were closed)."""
         for (grid_id,) in args:
             self.grids.forget(grid_id)
-            self._window_bottoms.pop(grid_id, None)
             display = self.window_displays.pop(grid_id, None)
             if display is not None:
                 self.main_window.destroy_editor_tab(display)
 
     def _n_redraw__win_pos(self, *args):
         """Associate window grids with their Neovim window handles and geometry."""
-        for grid_id, win, startrow, _startcol, _width, height in args:
+        for grid_id, win, _startrow, _startcol, _width, _height in args:
             self.grids.register_window(grid_id, win)
-            # the statusline sits right below the window; track where each window ends so the
-            # statusline strip knows which global rows to render (recomputed, so it follows
-            # both growing and shrinking)
-            self._window_bottoms[grid_id] = startrow + height
             # ensure the window has its editor tab, and make it the active one (this is how
             # opening a file in a new tabpage switches the GUI to it)
             display = self._ensure_editor(grid_id)
             self.main_window.set_active_editor(display)
+            # if a filepath arrived before this window was known, apply it now as the tab label
+            win_id = self._win_id(win)
+            if win_id in self._pending_labels:
+                self.main_window.set_tab_label(display, self._pending_labels.pop(win_id))
         self._layout_statusline_strip()
 
     def _n_redraw__win_hide(self, *args):
@@ -360,13 +378,11 @@ class NvimNotifications:
         self.dyncache.clean("hl-groups")
 
     def _n_redraw__mode_change(self, args):
-        """Information about cursor mode."""
+        """Information about cursor mode; the editor layer owns and applies it."""
         mode, mode_idx = args
         # we ignore the mode idx as we stored in the modes in a dict using the name
         mode_info = self.structs["mode-info"][mode]
-        self._mode_info = mode_info  # remember it for editor displays created later
-        for display in self.window_displays.values():
-            display.change_mode(mode_info)
+        self.main_window.set_editor_mode(mode_info)
 
     def _n_redraw__mode_info_set(self, args):
         """Information about cursor mode."""
@@ -394,18 +410,12 @@ class NvimNotifications:
         logger.debug("[NvimNotifications] options set: {}", options)
         self.options.update(options)
 
-        # react to some of those options
+        # react to some of those options; the editor layer owns and applies the font
         if "guifont" in options:
             name, size = options["guifont"].split(":")
             assert size[0] == "h"
             size = float(size[1:])
-            self._font = (name, size)  # remember it for editor displays created later
-            for display in self.window_displays.values():
-                display.set_font(name, size)
-            if self.message_display is not None:
-                self.message_display.set_font(name, size)
-            if self.statusline_display is not None:
-                self.statusline_display.set_font(name, size)
+            self.main_window.set_editor_font(name, size)
 
     def _n_redraw__set_icon(self, param):
         """Set the icon, if any."""

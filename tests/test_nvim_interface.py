@@ -349,7 +349,7 @@ class TestNvimInterfaceQuit:
         assert result is None
 
     async def test_normal_quit(self, nvim):
-        """Sends quit command and Enter, then waits for process to finish."""
+        """Sends Esc and 'qall', then waits for process to finish."""
         interface, mock = nvim
         quit_task = asyncio.create_task(interface.quit())
 
@@ -358,7 +358,7 @@ class TestNvimInterfaceQuit:
         assert method1 == "nvim_input"
         assert params1 == ["<Esc>"]
         assert method2 == "nvim_command"
-        assert params2 == ["quit"]
+        assert params2 == ["qall"]
 
         mock.exit(0)
         interface._receive_responses()
@@ -371,7 +371,7 @@ class TestNvimInterfaceQuit:
         quit_task = asyncio.create_task(interface.quit())
 
         await mock.recv_request()                # nvim_input <Esc>
-        msgid, _, _ = await mock.recv_request()  # nvim_command quit
+        msgid, _, _ = await mock.recv_request()  # nvim_command qall
         await mock.send_response(msgid, error=[0, "E37: No write since last change"])
         await asyncio.sleep(0)
         result = await quit_task

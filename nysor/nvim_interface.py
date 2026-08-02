@@ -155,9 +155,10 @@ class NvimInterface:
 
         # this is a weird request; if all continues OK, Neovim will quit and a possible callback
         # is never called; however if there's a situation and Neovim can't quit, the errback
-        # will be called
+        # will be called. We use 'qall' (quit *all* windows/tabpages) so this really quits the
+        # editor; plain 'quit' would only close the current window when several are open.
         self._neovim_being_quited = True
-        await self._request(None, eback, "nvim_command", "quit")
+        await self._request(None, eback, "nvim_command", "qall")
 
         await self._quit_processed.wait()
         self._neovim_being_quited = False
