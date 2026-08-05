@@ -348,6 +348,7 @@ class EditorPane(QWidget):
         self.main_window = main_window
         self.text_display = TextDisplay(main_window)
         self.text_display.pane = self  # back-reference so viewport events can reach the pane
+        self.nvim_win_id = None  # id of the Neovim window shown here (set once win_pos arrives)
 
         self.v_scroll = QScrollBar(Qt.Orientation.Vertical)
         self.v_scroll.setMinimum(0)
@@ -495,6 +496,9 @@ class MainApp(QMainWindow):
         self.tabs.addTab(self._unclaimed_pane, "[No Name]")
         self.text_display = self._unclaimed_pane.text_display
 
+        # switching a tab from the GUI must move Neovim (see _on_tab_changed)
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
         # editor-wide font and cursor mode: owned here (the editor layer), remembered so tabs
         # created later start with the right values
         self._editor_font = None
@@ -591,12 +595,34 @@ class MainApp(QMainWindow):
             self.text_display = current.text_display if current is not None else None
 
     def set_active_editor(self, display):
-        """Make the given editor display the active one (select its tab and focus it)."""
+        """Make the given editor display the active one (select its tab and focus it).
+
+        Note text_display is updated *before* selecting the tab, so the currentChanged that this
+        emits is recognized as already-active by _on_tab_changed (no bounce back to Neovim).
+        """
         self.text_display = display
         index = self.tabs.indexOf(display.pane)
         if index != -1 and self.tabs.currentIndex() != index:
             self.tabs.setCurrentIndex(index)
         display.setFocus()
+
+    def bind_window(self, display, win_id):
+        """Record which Neovim window a pane shows, so the GUI can switch back to it."""
+        display.pane.nvim_win_id = win_id
+
+    def _on_tab_changed(self, index):
+        """When the user switches tab in the GUI, move Neovim to that tab's window.
+
+        Neovim-driven switches emit this too (set_active_editor selects the tab), but by then the
+        target pane is already the active one, so we detect that and don't bounce back to Neovim.
+        """
+        pane = self.tabs.widget(index)
+        if pane is None or pane.nvim_win_id is None:
+            return
+        if self.text_display is not None and pane is self.text_display.pane:
+            return  # Neovim already drove this switch; nothing to send back
+        # win_gotoid takes the plain window id and switches window (and its tabpage)
+        self.nvi.future_request("nvim_call_function", "win_gotoid", [pane.nvim_win_id])
 
     def _path_discover_cb(self, path):
         """Indicate if the given path is opened here and claim GUI attention if so."""

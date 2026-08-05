@@ -320,9 +320,11 @@ class NvimNotifications:
 
             self.grids.register_window(grid_id, win_id)
 
-            # ensure the window has its editor tab, and make it the active one (this is how
-            # opening a file in a new tabpage switches the GUI to it)
+            # ensure the window has its editor tab, bind its Neovim window id (so the GUI can
+            # switch back to it), and make it the active one (this is how opening a file in a new
+            # tabpage switches the GUI to it)
             display = self._ensure_editor(grid_id)
+            self.main_window.bind_window(display, win_id)
             self.main_window.set_active_editor(display)
 
             # if a filepath arrived before this window was known, apply it now as the tab label
