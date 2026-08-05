@@ -125,7 +125,7 @@ class TestNvimNotificationsHandlers:
 
     def test_filepath_changed_labels_known_window(self, notif):
         """A filepath for a known window labels that window's tab."""
-        notif.grids.register_window(2, ["Window", 5])  # grid 2 already has notif._editor
+        notif.grids.register_window(2, 5)  # grid 2 (window id 5) already has notif._editor
         notif._h__filepath_changed(5, "/some/path")
         notif.main_window.set_tab_label.assert_called_once_with(notif._editor, "/some/path")
 
@@ -278,12 +278,12 @@ class TestGridRegistry:
         assert reg.kind_of(2) == "window"
 
     def test_get_grid_by_win_direct_lookup(self):
-        """get_grid_by_win resolves the grid from a window id or handle without iterating."""
+        """get_grid_by_win resolves the grid from a window id without iterating."""
         reg = GridRegistry()
-        reg.register_window(2, ["Window", 5])
-        reg.register_window(4, ["Window", 9])
-        assert reg.get_grid_by_win(5) == 2          # by raw id (as Neovim sends elsewhere)
-        assert reg.get_grid_by_win(["Window", 9]) == 4  # by handle
+        reg.register_window(2, 5)
+        reg.register_window(4, 9)
+        assert reg.get_grid_by_win(5) == 2
+        assert reg.get_grid_by_win(9) == 4
         assert reg.get_grid_by_win(123) is None
 
     def test_forget_message_grid(self):
@@ -297,6 +297,6 @@ class TestGridRegistry:
     def test_forget_window(self):
         """Forgetting a window grid drops its reverse lookup."""
         reg = GridRegistry()
-        reg.register_window(2, ["Window", 5])
+        reg.register_window(2, 5)
         reg.forget(2)
         assert reg.get_grid_by_win(5) is None
