@@ -208,10 +208,9 @@ class NvimNotifications:
     def _h__modified_changed(self, win_id: int, is_modified: bool):
         """Handle the notification when a window's buffer starts/stops having changes."""
         grid = self.grids.get_grid_by_win(win_id)
-        display = self.window_displays.get(grid) if grid is not None else None
-        # C? por qué no hacer display = `self.window_displays.get(grid)` y listo?
+        display = self.window_displays.get(grid)
+        # display may legitimately be None when the change arrives for a window we don't know yet
         if display is not None:
-            # C? puede ser que display sea None?
             self.main_window.set_tab_modified(display, is_modified)
 
     def _h__filepath_changed(self, win_id: int, filepath: str):

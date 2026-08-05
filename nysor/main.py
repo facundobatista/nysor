@@ -41,7 +41,7 @@ from nysor import swarm
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications
-from nysor.text_display import TextDisplay
+from nysor.text_display import TextDisplay, MIN_COLS_ROWS
 
 logger = logging.getLogger(__name__)
 
@@ -515,7 +515,7 @@ class MainApp(QMainWindow):
         # fixed size: the strip is exactly as wide as its grid (Neovim's reported width),
         # left-aligned so it lines up with the editor text above
         self.statusline_display.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
         )
         self.statusline_display.resize_view((self.text_display.display_size[0], 1))
         self.main_layout.addWidget(self.statusline_display, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -527,7 +527,7 @@ class MainApp(QMainWindow):
             self, interactive=False
         )
         self.message_display.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
         )
         # start as a single line, as wide as the editor display; Neovim resizes it right away
         self.message_display.resize_view((self.text_display.display_size[0], 1))
@@ -546,7 +546,7 @@ class MainApp(QMainWindow):
         """Rebuild a tab's label from its filepath plus a modified marker."""
         index = self.tabs.indexOf(pane)
         if index == -1:
-            # C? log in warning here
+            logger.warning("_refresh_tab_label got a pane that is not a tab")
             return
         name = os.path.basename(pane.filepath) if pane.filepath else "[No Name]"
         if pane.modified:
@@ -649,6 +649,28 @@ class MainApp(QMainWindow):
         # win_gotoid takes the plain window id and switches window (and its tabpage)
         self.nvi.future_request("nvim_call_function", "win_gotoid", [pane.nvim_win_id])
 
+    def resizeEvent(self, event):
+        """Resize Neovim's global grid to the whole editing area on a window resize."""
+        super().resizeEvent(event)
+        self._resize_global_grid()
+
+    def _resize_global_grid(self):
+        """Tell Neovim the global grid size, computed from the full editing area.
+
+        This is driven by the window size (not the editor tab's size), so a strip growing or
+        shrinking a tab never feeds back into a resize (which used to loop, e.g. on a swap-file
+        prompt). Neovim carves the statusline/message rows out of this global size itself.
+        """
+        display = self.text_display
+        if display is None or display.font_size is None:
+            return
+        font_size = display.font_size
+        # width from the editor's text area (excludes the scroll bar); height from the whole
+        # area (so a strip growing/shrinking never changes the size we send -> no resize loop)
+        cols = max(MIN_COLS_ROWS, int(display.width() / font_size.width))
+        rows = max(MIN_COLS_ROWS, int(self.central_widget.height() / font_size.height))
+        self.nvi.future_request("nvim_ui_try_resize", cols, rows)
+
     def _path_discover_cb(self, path):
         """Indicate if the given path is opened here and claim GUI attention if so."""
         # FIXME.90: this verification will change when multibuffers
@@ -677,6 +699,10 @@ class MainApp(QMainWindow):
         # the tab(s) are rendered by Qt, so Neovim must never use the top grid line for its
         # own tabline
         await self.nvi.call("nvim_set_option_value", "showtabline", 0, {})
+
+        # the window is likely already shown at its real size; sync the global grid to it now
+        # (resize requests before the attach were ignored)
+        self._resize_global_grid()
 
         # subscribe to the buffer file change; we send the current window id so the GUI can label
         # the right tab (comes back as a 'filepath_changed' notification)

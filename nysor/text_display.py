@@ -21,7 +21,6 @@ from PyQt6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
-    QResizeEvent,
     QWheelEvent,
 )
 from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
@@ -111,12 +110,6 @@ class BaseDisplay(QWidget):
     def sizeHint(self):
         """Provide the desired size for the widget."""
         return self.widget_size
-
-    def resizeEvent(self, event: QResizeEvent):
-        """Hook-up in the event to trigger internal resizing."""
-        super().resizeEvent(event)
-        if self._interactive:
-            self.window_resize()
 
     def keyPressEvent(self, event: QKeyEvent):
         """Get all keyboard events."""
@@ -321,12 +314,6 @@ class TextDisplay(BaseDisplay):
         self.nvimhl_to_qtfmt = {}
         # cache to hold mode_info processed structures
         self.mode_info_structs = {}
-
-    def window_resize(self):
-        """Inform Neovim of new window size."""
-        cols = max(MIN_COLS_ROWS, int(self.width() / self.font_size.width))
-        rows = max(MIN_COLS_ROWS, int(self.height() / self.font_size.height))
-        self.main_window.nvi.future_request("nvim_ui_try_resize", cols, rows)
 
     def handle_keyboard(self, key_text, key, modifiers):
         """Handle keyboard events."""
