@@ -81,9 +81,10 @@ class TestDynamicCache:
 class TestNvimNotificationsHandler:
 
     def test_known_method_is_dispatched(self, notif):
-        """handler() calls the matching _h__* method."""
-        notif.handler("modified_changed", [True])
-        notif.main_window.set_buffer_state.assert_called_once_with(is_modified=True)
+        """handler() calls the matching _h__* method with the notification params."""
+        notif.grids.register_window(2, 5)  # grid 2 (window id 5) already has notif._editor
+        notif.handler("modified_changed", [5, True])
+        notif.main_window.set_tab_modified.assert_called_once_with(notif._editor, True)
 
     def test_unknown_method_logs_error(self, notif, logs):
         """handler() logs an error for unknown methods and does not raise."""
@@ -119,9 +120,10 @@ class TestNvimNotificationsRedraw:
 class TestNvimNotificationsHandlers:
 
     def test_modified_changed(self, notif):
-        """Calls main_window.set_buffer_state with is_modified."""
-        notif._h__modified_changed(True)
-        notif.main_window.set_buffer_state.assert_called_once_with(is_modified=True)
+        """A modified change for a known window marks that window's tab."""
+        notif.grids.register_window(2, 5)  # grid 2 (window id 5) already has notif._editor
+        notif._h__modified_changed(5, True)
+        notif.main_window.set_tab_modified.assert_called_once_with(notif._editor, True)
 
     def test_filepath_changed_labels_known_window(self, notif):
         """A filepath for a known window labels that window's tab."""

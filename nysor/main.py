@@ -349,6 +349,9 @@ class EditorPane(QWidget):
         self.text_display = TextDisplay(main_window)
         self.text_display.pane = self  # back-reference so viewport events can reach the pane
         self.nvim_win_id = None  # id of the Neovim window shown here (set once win_pos arrives)
+        # per-tab state reflected in the tab label
+        self.filepath = None
+        self.modified = False
 
         self.v_scroll = QScrollBar(Qt.Orientation.Vertical)
         self.v_scroll.setMinimum(0)
@@ -532,23 +535,37 @@ class MainApp(QMainWindow):
 
         self.text_display.setFocus()
 
-    def set_buffer_state(self, is_modified=None):
-        """Set the (still global) modified state and the related menu entries."""
-        logger.debug("Set buffer state; is_modified={}", is_modified)
-        # FIXME.90 -- modified state is still global; make it per-tab in a later step
-        if is_modified is not None:
-            self.state_buffer_is_modified = is_modified
-            self._menu.actions["file__save"].setEnabled(is_modified)
-            self._menu.actions["file__open"].setEnabled(not is_modified)
+    def _sync_menu_state(self):
+        """Enable/disable the file menu entries according to the active tab's modified state."""
+        is_modified = self.text_display.pane.modified if self.text_display is not None else False
+        self.state_buffer_is_modified = is_modified  # keeps the (still global) menu logic working
+        self._menu.actions["file__save"].setEnabled(is_modified)
+        self._menu.actions["file__open"].setEnabled(not is_modified)
+
+    def _refresh_tab_label(self, pane):
+        """Rebuild a tab's label from its filepath plus a modified marker."""
+        index = self.tabs.indexOf(pane)
+        if index == -1:
+            # C? log in warning here
+            return
+        name = os.path.basename(pane.filepath) if pane.filepath else "[No Name]"
+        if pane.modified:
+            name = f"● {name}"
+        self.tabs.setTabText(index, name)
 
     def set_tab_label(self, display, filepath):
-        """Set the label of the tab holding the given editor display, from its filepath."""
-        label = os.path.basename(filepath) if filepath else "[No Name]"
-        index = self.tabs.indexOf(display.pane)
-        if index != -1:
-            self.tabs.setTabText(index, label)
+        """Set the tab's filepath (and thus its label) for the given editor display."""
+        display.pane.filepath = filepath
+        self._refresh_tab_label(display.pane)
         # FIXME.90: swarm path discovery is still global; track the last labeled path for now
         self.state_buffer_filepath = filepath
+
+    def set_tab_modified(self, display, modified):
+        """Set the tab's modified state (marker in the label; menu if it is the active tab)."""
+        display.pane.modified = modified
+        self._refresh_tab_label(display.pane)
+        if display is self.text_display:
+            self._sync_menu_state()
 
     def _editor_displays(self):
         """Return every editor display currently held in a tab."""
@@ -608,6 +625,7 @@ class MainApp(QMainWindow):
         if self.tabs.currentIndex() != index:  # not an error: may already be current
             self.tabs.setCurrentIndex(index)
         display.setFocus()
+        self._sync_menu_state()  # the file menu follows the newly active tab
 
     def bind_window(self, display, win_id):
         """Record which Neovim window a pane shows, so the GUI can switch back to it."""
@@ -673,17 +691,18 @@ class MainApp(QMainWindow):
         """
         await self.nvi.call("nvim_exec_lua", _code, [])
 
-        # subscribe to the buffer modified change (will comeback as a 'set_buffer_state' call)
-        # FIXME.90 -- this needs to evolve to multibuffers
+        # subscribe to the buffer modified change; we send the current window id so the GUI can
+        # mark the right tab (comes back as a 'modified_changed' notification)
         _code = f"""
             vim.api.nvim_create_autocmd({{'BufModifiedSet', 'BufWritePost'}}, {{
                 callback = function()
-                    vim.rpcnotify({self.nvi.channel_id}, 'modified_changed', vim.bo.modified)
+                    local win = vim.api.nvim_get_current_win()
+                    vim.rpcnotify({self.nvi.channel_id}, 'modified_changed', win, vim.bo.modified)
                 end
             }})
         """
         await self.nvi.call("nvim_exec_lua", _code, [])
-        self.set_buffer_state(is_modified=False)  # initially it's always not modified
+        self._sync_menu_state()  # initial menu state (no active tab modified yet)
 
         # if a source is indicated, open it, differentiating if it's a file or standard input
         if paths_to_open == SPECIAL_STDIN_PATH:
