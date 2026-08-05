@@ -600,9 +600,12 @@ class MainApp(QMainWindow):
         Note text_display is updated *before* selecting the tab, so the currentChanged that this
         emits is recognized as already-active by _on_tab_changed (no bounce back to Neovim).
         """
-        self.text_display = display
         index = self.tabs.indexOf(display.pane)
-        if index != -1 and self.tabs.currentIndex() != index:
+        if index == -1:
+            logger.warning("set_active_editor got a display whose pane is not a tab")
+            return
+        self.text_display = display
+        if self.tabs.currentIndex() != index:  # not an error: may already be current
             self.tabs.setCurrentIndex(index)
         display.setFocus()
 
@@ -617,10 +620,14 @@ class MainApp(QMainWindow):
         target pane is already the active one, so we detect that and don't bounce back to Neovim.
         """
         pane = self.tabs.widget(index)
-        if pane is None or pane.nvim_win_id is None:
-            return
-        if self.text_display is not None and pane is self.text_display.pane:
+        if pane is None or self.text_display is None:
+            return  # no current tab / no active display: only while tearing down, nothing to do
+        if pane is self.text_display.pane:
             return  # Neovim already drove this switch; nothing to send back
+        if pane.nvim_win_id is None:
+            # a switchable tab should always have its Neovim window bound by now
+            logger.warning("GUI switched to tab {} with no bound Neovim window", index)
+            return
         # win_gotoid takes the plain window id and switches window (and its tabpage)
         self.nvi.future_request("nvim_call_function", "win_gotoid", [pane.nvim_win_id])
 
