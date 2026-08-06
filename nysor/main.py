@@ -349,6 +349,7 @@ class EditorPane(QWidget):
         self.text_display = TextDisplay(main_window)
         self.text_display.pane = self  # back-reference so viewport events can reach the pane
         self.nvim_win_id = None  # id of the Neovim window shown here (set once win_pos arrives)
+        self.destroyed = False  # set when the tab is removed, so in-flight async work bails out
         # per-tab state reflected in the tab label
         self.filepath = None
         self.modified = False
@@ -375,8 +376,12 @@ class EditorPane(QWidget):
     async def adjust_viewport(self, topline, botline, line_count, curcol):
         """Adjust this pane's scroll bars according to what Neovim says.
 
-        Called from the Neovim layer on this window's viewport change notifications.
+        Called from the Neovim layer on this window's viewport change notifications. This is
+        async (it queries Neovim), so the tab may be closed while it runs; we bail out at each
+        step if the pane was destroyed, to not touch already-deleted Qt widgets.
         """
+        if self.destroyed:
+            return
         display_width, display_height = self.text_display.display_size
 
         # vertical: use information from the viewport
@@ -392,6 +397,8 @@ class EditorPane(QWidget):
 
         # only if not wrapping, using current column but also queried line lengths
         is_wrapping = await self.main_window.nvi.call("nvim_get_option_value", "wrap", {})
+        if self.destroyed:
+            return
         if is_wrapping:
             # just turn off the scroll bar as when wrapping all text will be inside the window
             self.h_scroll.setEnabled(False)
@@ -404,7 +411,7 @@ class EditorPane(QWidget):
         end = botline - 1  # botline is the "next line, out of the view"
         cmd = f"map(getbufline({buf}, {start}, {end}), {{key, val -> strlen(val)}})"
         line_lengths = await self.main_window.nvi.call("nvim_eval", cmd)
-        if not line_lengths:
+        if self.destroyed or not line_lengths:
             return
 
         max_line = max(line_lengths)
@@ -417,6 +424,8 @@ class EditorPane(QWidget):
             self.h_scroll.setMaximum(max_line - 1)
 
             win_info = await self.main_window.nvi.call("nvim_eval", "winsaveview()")
+            if self.destroyed:
+                return
             leftcol = win_info["leftcol"]
             self.h_scroll_last_position = leftcol  # before setting value to ignore later event
             self.h_scroll.setValue(leftcol)
@@ -603,6 +612,7 @@ class MainApp(QMainWindow):
     def destroy_editor_tab(self, display):
         """Remove the tab holding the given editor display (its window was closed)."""
         pane = display.pane
+        pane.destroyed = True  # in-flight async work (e.g. adjust_viewport) must bail out
         index = self.tabs.indexOf(pane)
         if index != -1:
             self.tabs.removeTab(index)
