@@ -349,7 +349,9 @@ class EditorPane(QWidget):
         self.text_display = TextDisplay(main_window)
         self.text_display.pane = self  # back-reference so viewport events can reach the pane
         self.nvim_win_id = None  # id of the Neovim window shown here (set once win_pos arrives)
-        self.destroyed = False  # set when the tab is removed, so in-flight async work bails out
+        self.nvim_buf_id = None  # id of the buffer shown here (tracked so we can act on it after
+        #                          the window closes, when Neovim can no longer be queried for it)
+        self.closed = False  # set when the tab is removed, so in-flight async work bails out
         # per-tab state reflected in the tab label
         self.filepath = None
         self.modified = False
@@ -380,7 +382,7 @@ class EditorPane(QWidget):
         async (it queries Neovim), so the tab may be closed while it runs; we bail out at each
         step if the pane was destroyed, to not touch already-deleted Qt widgets.
         """
-        if self.destroyed:
+        if self.closed:
             return
         display_width, display_height = self.text_display.display_size
 
@@ -397,7 +399,7 @@ class EditorPane(QWidget):
 
         # only if not wrapping, using current column but also queried line lengths
         is_wrapping = await self.main_window.nvi.call("nvim_get_option_value", "wrap", {})
-        if self.destroyed:
+        if self.closed:
             return
         if is_wrapping:
             # just turn off the scroll bar as when wrapping all text will be inside the window
@@ -411,7 +413,7 @@ class EditorPane(QWidget):
         end = botline - 1  # botline is the "next line, out of the view"
         cmd = f"map(getbufline({buf}, {start}, {end}), {{key, val -> strlen(val)}})"
         line_lengths = await self.main_window.nvi.call("nvim_eval", cmd)
-        if self.destroyed or not line_lengths:
+        if self.closed or not line_lengths:
             return
 
         max_line = max(line_lengths)
@@ -424,7 +426,7 @@ class EditorPane(QWidget):
             self.h_scroll.setMaximum(max_line - 1)
 
             win_info = await self.main_window.nvi.call("nvim_eval", "winsaveview()")
-            if self.destroyed:
+            if self.closed:
                 return
             leftcol = win_info["leftcol"]
             self.h_scroll_last_position = leftcol  # before setting value to ignore later event
@@ -471,6 +473,8 @@ class MainApp(QMainWindow):
         self._closing = 0
         self.state_buffer_is_modified = False
         self.state_buffer_filepath = None
+        # a pane kept aside while its buffer is reopened, to re-attach to the new window
+        self._reattach_pending = None
         self.nvim_notifs = NvimNotifications(self)
 
         # setup the Neovim interface
@@ -562,12 +566,42 @@ class MainApp(QMainWindow):
             name = f"● {name}"
         self.tabs.setTabText(index, name)
 
-    def set_tab_label(self, display, filepath):
-        """Set the tab's filepath (and thus its label) for the given editor display."""
-        display.pane.filepath = filepath
-        self._refresh_tab_label(display.pane)
+    def set_tab_buffer(self, display, bufnr, filepath):
+        """Record which buffer a tab shows and update its label from the filepath.
+
+        Enforces one-buffer-one-tab (the in-process analogue of the swarm's cross-process path
+        check): if another tab already shows this buffer, collapse this duplicate window into it
+        -- switch to the existing tab and close the redundant Neovim window.
+        """
+        pane = display.pane
+        pane.nvim_buf_id = bufnr
+        pane.filepath = filepath
+        self._refresh_tab_label(pane)
         # FIXME.90: swarm path discovery is still global; track the last labeled path for now
         self.state_buffer_filepath = filepath
+
+        existing = self._other_tab_with_buffer(pane, bufnr)
+        if existing is not None:
+            self._collapse_duplicate(pane, existing)
+
+    def _other_tab_with_buffer(self, pane, bufnr):
+        """Return another (live) tab's pane that already shows the given buffer, or None."""
+        for i in range(self.tabs.count()):
+            widget = self.tabs.widget(i)
+            if widget is not pane and not widget.closed and widget.nvim_buf_id == bufnr:
+                return widget
+        return None
+
+    def _collapse_duplicate(self, dup_pane, existing_pane):
+        """Go to the tab that already shows the buffer and close the redundant window."""
+        # mark the duplicate as closing right away, so switching to the existing tab (which fires
+        # its own set_tab_buffer) does not see it and try to collapse in the other direction
+        dup_pane.closed = True
+        if existing_pane.nvim_win_id is not None:
+            self.nvi.future_request(
+                "nvim_call_function", "win_gotoid", [existing_pane.nvim_win_id])
+        if dup_pane.nvim_win_id is not None:
+            self.nvi.future_request("nvim_win_close", dup_pane.nvim_win_id, False)
 
     def set_tab_modified(self, display, modified):
         """Set the tab's modified state (marker in the label; menu if it is the active tab)."""
@@ -595,7 +629,16 @@ class MainApp(QMainWindow):
             display.change_mode(mode_info)
 
     def build_editor_tab(self):
-        """Create (or reuse the initial) editor pane and its tab, returning its display."""
+        """Create (or reuse) the editor pane for a new window, returning its display.
+
+        If a pane is waiting to be re-attached (its window was reopened after aborting a close),
+        reuse it so the same tab keeps its place and state. Otherwise reuse the initial tab or
+        make a new one.
+        """
+        if self._reattach_pending is not None:
+            pane = self._reattach_pending
+            self._reattach_pending = None
+            return pane.text_display
         if self._unclaimed_pane is not None:
             pane = self._unclaimed_pane
             self._unclaimed_pane = None
@@ -610,9 +653,9 @@ class MainApp(QMainWindow):
         return pane.text_display
 
     def destroy_editor_tab(self, display):
-        """Remove the tab holding the given editor display (its window was closed)."""
+        """Remove the tab holding the given editor display."""
         pane = display.pane
-        pane.destroyed = True  # in-flight async work (e.g. adjust_viewport) must bail out
+        pane.closed = True  # in-flight async work (e.g. adjust_viewport) must bail out
         index = self.tabs.indexOf(pane)
         if index != -1:
             self.tabs.removeTab(index)
@@ -620,6 +663,49 @@ class MainApp(QMainWindow):
         if self.text_display is display:
             current = self.tabs.currentWidget()
             self.text_display = current.text_display if current is not None else None
+
+    def on_editor_window_closed(self, display):
+        """React to Neovim closing a window (e.g. ':close'), keeping tab<->buffer consistent.
+
+        As a GUI we do not honor ':close' literally (which would just hide the buffer). Instead:
+        - if that buffer is still shown in another (live) tab -- i.e. we are cleaning up a
+          duplicate we just collapsed -- drop this tab without touching the buffer;
+        - if it has no unsaved changes, close the tab and delete the buffer in Neovim;
+        - if it has unsaved changes, abort the close: the buffer is still loaded (only its window
+          was closed), so re-show it in a new window, re-attach this same tab to it, and tell the
+          user to save (or use Neovim commands) first.
+        While the app itself is quitting we only drop the tab (qall already prompts).
+        """
+        pane = display.pane
+        bufnr = pane.nvim_buf_id
+        shown_elsewhere = self._other_tab_with_buffer(pane, bufnr) is not None
+        if self._closing != 0 or bufnr is None or shown_elsewhere:
+            self.destroy_editor_tab(display)
+            return
+
+        if not pane.modified:
+            self.destroy_editor_tab(display)
+            self.nvi.future_request("nvim_buf_delete", bufnr, {})
+            return
+
+        # unsaved changes: abort the close -> the buffer is still loaded, re-show it in a new
+        # window (':sbuffer') and re-attach this same tab to that window
+        self._reattach_pending = pane
+        self.nvi.future_request("nvim_command", f"tab sbuffer {bufnr}")
+        self._show_close_aborted(pane)
+
+    def _show_close_aborted(self, pane):
+        """Tell the user we kept a tab open because its buffer had unsaved changes."""
+        name = os.path.basename(pane.filepath) if pane.filepath else "[No Name]"
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Icon.Information)
+        dlg.setWindowTitle("Close aborted")
+        dlg.setText(
+            f"{name!r} has unsaved changes, so its tab was kept open.\n"
+            "Save it (or use a Neovim command like :w / :q!) before closing."
+        )
+        dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dlg.open()  # non-blocking; just informational
 
     def set_active_editor(self, display):
         """Make the given editor display the active one (select its tab and focus it).
@@ -714,14 +800,17 @@ class MainApp(QMainWindow):
         # (resize requests before the attach were ignored)
         self._resize_global_grid()
 
-        # subscribe to the buffer file change; we send the current window id so the GUI can label
-        # the right tab (comes back as a 'filepath_changed' notification)
+        # subscribe to which buffer is shown in which window; we send (win, bufnr, name) so the
+        # GUI can label the right tab and remember each window's buffer (needed to act on it when
+        # the window later closes). BufWinEnter also covers a buffer (re)appearing in a window
+        # without a read, e.g. ':tab sbuffer' when we abort a modified tab's close
         _code = f"""
-            vim.api.nvim_create_autocmd({{'BufFilePost', 'BufReadPost'}}, {{
+            vim.api.nvim_create_autocmd({{'BufFilePost', 'BufReadPost', 'BufWinEnter'}}, {{
                 callback = function()
                     local win = vim.api.nvim_get_current_win()
+                    local buf = vim.api.nvim_get_current_buf()
                     local name = vim.api.nvim_buf_get_name(0)
-                    vim.rpcnotify({self.nvi.channel_id}, 'filepath_changed', win, name)
+                    vim.rpcnotify({self.nvi.channel_id}, 'window_buffer', win, buf, name)
                 end
             }})
         """

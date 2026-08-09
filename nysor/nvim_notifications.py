@@ -120,8 +120,8 @@ class NvimNotifications:
         self.grids = GridRegistry()
         self._grid_sizes = {}  # grid_id -> (width, height) as last reported by grid_resize
         self._msg_row = None  # top row of the message grid within the global grid
-        # filepaths that arrived before their window grid was known (win_id -> filepath)
-        self._pending_labels = {}
+        # buffer info that arrived before its window grid was known (win_id -> (bufnr, filepath))
+        self._pending_buffers = {}
 
     def _display_for(self, grid_id):
         """Return the display that renders the given grid, or None if not rendered."""
@@ -213,18 +213,18 @@ class NvimNotifications:
         if display is not None:
             self.main_window.set_tab_modified(display, is_modified)
 
-    def _h__filepath_changed(self, win_id: int, filepath: str):
-        """Handle the notification when a window's buffer gets (or changes) its file.
+    def _h__window_buffer(self, win_id: int, bufnr: int, filepath: str):
+        """Handle the notification about which buffer a window shows.
 
-        `win_id` is the Neovim window id where it happened; we use it to label the right tab. If
-        the window's grid is not known yet (win_pos not received), we stash it and apply it then.
+        Sets the tab's buffer id and label. If the window's grid is not known yet (win_pos not
+        received), we stash it and apply it when win_pos arrives.
         """
         grid = self.grids.get_grid_by_win(win_id)
         display = self.window_displays.get(grid) if grid is not None else None
         if display is not None:
-            self.main_window.set_tab_label(display, filepath)
+            self.main_window.set_tab_buffer(display, bufnr, filepath)
         else:
-            self._pending_labels[win_id] = filepath
+            self._pending_buffers[win_id] = (bufnr, filepath)
 
     def handler(self, method: str, parameters: list[Any]):
         """Handle all notifications from Neovim."""
@@ -312,7 +312,9 @@ class NvimNotifications:
             self.grids.forget(grid_id)
             display = self.window_displays.pop(grid_id, None)
             if display is not None:
-                self.main_window.destroy_editor_tab(display)
+                # let the GUI decide what to do with that window's buffer (close it, or, if it
+                # has unsaved changes, reopen it and re-attach this tab)
+                self.main_window.on_editor_window_closed(display)
 
     def _n_redraw__win_pos(self, *args):
         """Associate window grids with their Neovim window handles and geometry."""
@@ -331,9 +333,10 @@ class NvimNotifications:
             self.main_window.bind_window(display, win_id)
             self.main_window.set_active_editor(display)
 
-            # if a filepath arrived before this window was known, apply it now as the tab label
-            if win_id in self._pending_labels:
-                self.main_window.set_tab_label(display, self._pending_labels.pop(win_id))
+            # if buffer info arrived before this window was known, apply it now
+            if win_id in self._pending_buffers:
+                bufnr, filepath = self._pending_buffers.pop(win_id)
+                self.main_window.set_tab_buffer(display, bufnr, filepath)
         self._layout_statusline_strip()
 
     def _n_redraw__win_hide(self, *args):

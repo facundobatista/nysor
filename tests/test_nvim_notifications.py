@@ -125,17 +125,17 @@ class TestNvimNotificationsHandlers:
         notif._h__modified_changed(5, True)
         notif.main_window.set_tab_modified.assert_called_once_with(notif._editor, True)
 
-    def test_filepath_changed_labels_known_window(self, notif):
-        """A filepath for a known window labels that window's tab."""
+    def test_window_buffer_known_window(self, notif):
+        """Buffer info for a known window sets that tab's buffer and label."""
         notif.grids.register_window(2, 5)  # grid 2 (window id 5) already has notif._editor
-        notif._h__filepath_changed(5, "/some/path")
-        notif.main_window.set_tab_label.assert_called_once_with(notif._editor, "/some/path")
+        notif._h__window_buffer(5, 7, "/some/path")
+        notif.main_window.set_tab_buffer.assert_called_once_with(notif._editor, 7, "/some/path")
 
-    def test_filepath_changed_pending_for_unknown_window(self, notif):
-        """A filepath for a not-yet-known window is stashed until its win_pos arrives."""
-        notif._h__filepath_changed(99, "/some/path")
-        notif.main_window.set_tab_label.assert_not_called()
-        assert notif._pending_labels[99] == "/some/path"
+    def test_window_buffer_pending_for_unknown_window(self, notif):
+        """Buffer info for a not-yet-known window is stashed until its win_pos arrives."""
+        notif._h__window_buffer(99, 7, "/some/path")
+        notif.main_window.set_tab_buffer.assert_not_called()
+        assert notif._pending_buffers[99] == (7, "/some/path")
 
 
 class TestNvimNotificationsRedrawHandlers:
