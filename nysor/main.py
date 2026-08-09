@@ -267,7 +267,7 @@ class MainMenu:
     @_log_action
     def _on__file__save(self):
         """Save the buffer in the current file."""
-        if self._main_window.state_buffer_filepath:
+        if self._main_window.active_filepath():
             logger.debug("Saving the buffer directly with current name")
             self._main_window.buffer_save()
         else:
@@ -348,12 +348,9 @@ class EditorPane(QWidget):
         self.main_window = main_window
         self.text_display = TextDisplay(main_window)
         self.text_display.pane = self  # back-reference so viewport events can reach the pane
-        self.nvim_win_id = None  # id of the Neovim window shown here (set once win_pos arrives)
-        self.nvim_buf_id = None  # id of the buffer shown here (tracked so we can act on it after
-        #                          the window closes, when Neovim can no longer be queried for it)
         self.closed = False  # set when the tab is removed, so in-flight async work bails out
-        # per-tab state reflected in the tab label
-        self.filepath = None
+        # identity (window/buffer/filepath) lives in the GridRegistry; the pane only keeps the
+        # transient modified flag that its tab label shows
         self.modified = False
 
         self.v_scroll = QScrollBar(Qt.Orientation.Vertical)
@@ -472,10 +469,10 @@ class MainApp(QMainWindow):
 
         self._closing = 0
         self.state_buffer_is_modified = False
-        self.state_buffer_filepath = None
         # a pane kept aside while its buffer is reopened, to re-attach to the new window
         self._reattach_pending = None
         self.nvim_notifs = NvimNotifications(self)
+        self.grids = self.nvim_notifs.grids  # the central registry (single source of truth)
 
         # setup the Neovim interface
         try:
@@ -555,59 +552,65 @@ class MainApp(QMainWindow):
         self._menu.actions["file__save"].setEnabled(is_modified)
         self._menu.actions["file__open"].setEnabled(not is_modified)
 
-    def _refresh_tab_label(self, pane):
-        """Rebuild a tab's label from its filepath plus a modified marker."""
-        index = self.tabs.indexOf(pane)
-        if index == -1:
-            logger.warning("_refresh_tab_label got a pane that is not a tab")
+    def active_filepath(self):
+        """Return the filepath shown in the active tab, or None."""
+        if self.text_display is None:
+            return None
+        # C! Tenías razón: get_grid_by_pane devuelve None si el pane no está, y
+        # get_entry_by_grid(None) es _by_grid.get(None) -> None, así que la guarda sobra.
+        grid = self.grids.get_grid_by_pane(self.text_display.pane)
+        entry = self.grids.get_entry_by_grid(grid)
+        return entry.filepath if entry is not None else None
+
+    def _refresh_tab_label(self, grid_id):
+        """Rebuild a window grid's tab label from its filepath plus a modified marker."""
+        entry = self.grids.get_entry_by_grid(grid_id)
+        if entry is None:
+            logger.warning("_refresh_tab_label for a grid with no entry: {}", grid_id)
             return
-        name = os.path.basename(pane.filepath) if pane.filepath else "[No Name]"
-        if pane.modified:
+        index = self.tabs.indexOf(entry.pane)
+        if index == -1:
+            return
+        name = os.path.basename(entry.filepath) if entry.filepath else "[No Name]"
+        if entry.pane.modified:
             name = f"● {name}"
         self.tabs.setTabText(index, name)
 
-    def set_tab_buffer(self, display, bufnr, filepath):
-        """Record which buffer a tab shows and update its label from the filepath.
+    def refresh_tab(self, grid_id):
+        """Update a window grid's tab after its buffer/filepath changed, enforcing one-per-buffer.
 
-        Enforces one-buffer-one-tab (the in-process analogue of the swarm's cross-process path
-        check): if another tab already shows this buffer, collapse this duplicate window into it
-        -- switch to the existing tab and close the redundant Neovim window.
+        One-buffer-one-tab (the in-process analogue of the swarm's cross-process path check): if
+        another grid already owns this buffer, collapse this duplicate window into it -- switch to
+        the existing tab and close the redundant Neovim window.
         """
-        pane = display.pane
-        pane.nvim_buf_id = bufnr
-        pane.filepath = filepath
-        self._refresh_tab_label(pane)
-        # FIXME.90: swarm path discovery is still global; track the last labeled path for now
-        self.state_buffer_filepath = filepath
+        self._refresh_tab_label(grid_id)
+        entry = self.grids.get_entry_by_grid(grid_id)
+        if entry is None or entry.bufnr is None:
+            return
+        owner = self.grids.get_grid_by_buffer(entry.bufnr)
+        if owner is not None and owner != grid_id:
+            self._collapse_duplicate(grid_id, owner)
 
-        existing = self._other_tab_with_buffer(pane, bufnr)
-        if existing is not None:
-            self._collapse_duplicate(pane, existing)
+    def _collapse_duplicate(self, dup_grid, existing_grid):
+        """Go to the tab that already owns the buffer and close the redundant window."""
+        dup = self.grids.get_entry_by_grid(dup_grid)
+        existing = self.grids.get_entry_by_grid(existing_grid)
+        # mark the duplicate's pane as closing right away, so switching to the existing tab (which
+        # may fire its own refresh) does not try to collapse in the other direction
+        dup.pane.closed = True
+        if existing is not None and existing.win_id is not None:
+            self.nvi.future_request("nvim_call_function", "win_gotoid", [existing.win_id])
+        if dup.win_id is not None:
+            self.nvi.future_request("nvim_win_close", dup.win_id, False)
 
-    def _other_tab_with_buffer(self, pane, bufnr):
-        """Return another (live) tab's pane that already shows the given buffer, or None."""
-        for i in range(self.tabs.count()):
-            widget = self.tabs.widget(i)
-            if widget is not pane and not widget.closed and widget.nvim_buf_id == bufnr:
-                return widget
-        return None
-
-    def _collapse_duplicate(self, dup_pane, existing_pane):
-        """Go to the tab that already shows the buffer and close the redundant window."""
-        # mark the duplicate as closing right away, so switching to the existing tab (which fires
-        # its own set_tab_buffer) does not see it and try to collapse in the other direction
-        dup_pane.closed = True
-        if existing_pane.nvim_win_id is not None:
-            self.nvi.future_request(
-                "nvim_call_function", "win_gotoid", [existing_pane.nvim_win_id])
-        if dup_pane.nvim_win_id is not None:
-            self.nvi.future_request("nvim_win_close", dup_pane.nvim_win_id, False)
-
-    def set_tab_modified(self, display, modified):
-        """Set the tab's modified state (marker in the label; menu if it is the active tab)."""
-        display.pane.modified = modified
-        self._refresh_tab_label(display.pane)
-        if display is self.text_display:
+    def set_tab_modified(self, grid_id, modified):
+        """Set a window grid's modified state (label marker; menu if it is the active tab)."""
+        entry = self.grids.get_entry_by_grid(grid_id)
+        if entry is None:
+            return
+        entry.pane.modified = modified
+        self._refresh_tab_label(grid_id)
+        if entry.pane.text_display is self.text_display:
             self._sync_menu_state()
 
     def _editor_displays(self):
@@ -652,23 +655,23 @@ class MainApp(QMainWindow):
             pane.text_display.change_mode(self._editor_mode)
         return pane.text_display
 
-    def destroy_editor_tab(self, display):
-        """Remove the tab holding the given editor display."""
-        pane = display.pane
+    def destroy_editor_tab(self, pane):
+        """Remove the tab holding the given editor pane."""
         pane.closed = True  # in-flight async work (e.g. adjust_viewport) must bail out
         index = self.tabs.indexOf(pane)
         if index != -1:
             self.tabs.removeTab(index)
         pane.deleteLater()
-        if self.text_display is display:
+        if self.text_display is pane.text_display:
             current = self.tabs.currentWidget()
             self.text_display = current.text_display if current is not None else None
 
-    def on_editor_window_closed(self, display):
+    def on_editor_window_closed(self, entry):
         """React to Neovim closing a window (e.g. ':close'), keeping tab<->buffer consistent.
 
-        As a GUI we do not honor ':close' literally (which would just hide the buffer). Instead:
-        - if that buffer is still shown in another (live) tab -- i.e. we are cleaning up a
+        `entry` is the (already-forgotten) GridEntry of the closed window. As a GUI we do not
+        honor ':close' literally (which would just hide the buffer). Instead:
+        - if that buffer is still owned by another (live) tab -- i.e. we are cleaning up a
           duplicate we just collapsed -- drop this tab without touching the buffer;
         - if it has no unsaved changes, close the tab and delete the buffer in Neovim;
         - if it has unsaved changes, abort the close: the buffer is still loaded (only its window
@@ -676,15 +679,16 @@ class MainApp(QMainWindow):
           user to save (or use Neovim commands) first.
         While the app itself is quitting we only drop the tab (qall already prompts).
         """
-        pane = display.pane
-        bufnr = pane.nvim_buf_id
-        shown_elsewhere = self._other_tab_with_buffer(pane, bufnr) is not None
+        pane = entry.pane
+        bufnr = entry.bufnr
+        # the grid was already forgotten, so another owner means the buffer lives in another tab
+        shown_elsewhere = bufnr is not None and self.grids.get_grid_by_buffer(bufnr) is not None
         if self._closing != 0 or bufnr is None or shown_elsewhere:
-            self.destroy_editor_tab(display)
+            self.destroy_editor_tab(pane)
             return
 
         if not pane.modified:
-            self.destroy_editor_tab(display)
+            self.destroy_editor_tab(pane)
             self.nvi.future_request("nvim_buf_delete", bufnr, {})
             return
 
@@ -692,11 +696,11 @@ class MainApp(QMainWindow):
         # window (':sbuffer') and re-attach this same tab to that window
         self._reattach_pending = pane
         self.nvi.future_request("nvim_command", f"tab sbuffer {bufnr}")
-        self._show_close_aborted(pane)
+        self._show_close_aborted(entry.filepath)
 
-    def _show_close_aborted(self, pane):
+    def _show_close_aborted(self, filepath):
         """Tell the user we kept a tab open because its buffer had unsaved changes."""
-        name = os.path.basename(pane.filepath) if pane.filepath else "[No Name]"
+        name = os.path.basename(filepath) if filepath else "[No Name]"
         dlg = QMessageBox(self)
         dlg.setIcon(QMessageBox.Icon.Information)
         dlg.setWindowTitle("Close aborted")
@@ -707,25 +711,26 @@ class MainApp(QMainWindow):
         dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
         dlg.open()  # non-blocking; just informational
 
-    def set_active_editor(self, display):
-        """Make the given editor display the active one (select its tab and focus it).
+    def set_active_editor(self, grid_id):
+        """Make the given window grid's tab the active one (select its tab and focus it).
 
         Note text_display is updated *before* selecting the tab, so the currentChanged that this
         emits is recognized as already-active by _on_tab_changed (no bounce back to Neovim).
         """
-        index = self.tabs.indexOf(display.pane)
-        if index == -1:
-            logger.warning("set_active_editor got a display whose pane is not a tab")
+        entry = self.grids.get_entry_by_grid(grid_id)
+        if entry is None:
+            logger.warning("set_active_editor for a grid with no entry: {}", grid_id)
             return
-        self.text_display = display
+        pane = entry.pane
+        index = self.tabs.indexOf(pane)
+        if index == -1:
+            logger.warning("set_active_editor for a pane that is not a tab")
+            return
+        self.text_display = pane.text_display
         if self.tabs.currentIndex() != index:  # not an error: may already be current
             self.tabs.setCurrentIndex(index)
-        display.setFocus()
+        pane.text_display.setFocus()
         self._sync_menu_state()  # the file menu follows the newly active tab
-
-    def bind_window(self, display, win_id):
-        """Record which Neovim window a pane shows, so the GUI can switch back to it."""
-        display.pane.nvim_win_id = win_id
 
     def _on_tab_changed(self, index):
         """When the user switches tab in the GUI, move Neovim to that tab's window.
@@ -738,12 +743,14 @@ class MainApp(QMainWindow):
             return  # no current tab / no active display: only while tearing down, nothing to do
         if pane is self.text_display.pane:
             return  # Neovim already drove this switch; nothing to send back
-        if pane.nvim_win_id is None:
-            # a switchable tab should always have its Neovim window bound by now
-            logger.warning("GUI switched to tab {} with no bound Neovim window", index)
+        grid = self.grids.get_grid_by_pane(pane)
+        entry = self.grids.get_entry_by_grid(grid)
+        if entry is None or entry.win_id is None:
+            # a switchable tab should always have its Neovim window known by now
+            logger.warning("GUI switched to tab {} with no known Neovim window", index)
             return
         # win_gotoid takes the plain window id and switches window (and its tabpage)
-        self.nvi.future_request("nvim_call_function", "win_gotoid", [pane.nvim_win_id])
+        self.nvi.future_request("nvim_call_function", "win_gotoid", [entry.win_id])
 
     def resizeEvent(self, event):
         """Resize Neovim's global grid to the whole editing area on a window resize."""
@@ -768,9 +775,8 @@ class MainApp(QMainWindow):
         self.nvi.future_request("nvim_ui_try_resize", cols, rows)
 
     def _path_discover_cb(self, path):
-        """Indicate if the given path is opened here and claim GUI attention if so."""
-        # FIXME.90: this verification will change when multibuffers
-        is_here = path == self.state_buffer_filepath
+        """Indicate if the given path is opened here (in any tab) and claim GUI attention if so."""
+        is_here = self.grids.has_path(path)
         if is_here:
             # we have somebody else's path, claim attention!
             self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)

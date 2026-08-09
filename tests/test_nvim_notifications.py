@@ -14,14 +14,16 @@ from nysor.nvim_notifications import DynamicCache, GridRegistry, NvimNotificatio
 
 @pytest.fixture
 def notif(mocker):
-    """NvimNotifications with mocked main_window, displays, and call_async.
+    """NvimNotifications with a mocked main_window, strips, and call_async.
 
-    Grid 2 is pre-registered as a window, so its display is `notif._editor`.
+    Grid 2 is pre-registered as a window whose pane's display is `notif._editor`.
     """
     mocker.patch("nysor.nvim_notifications.call_async")
     nn = NvimNotifications(main_window=MagicMock())
-    nn._editor = MagicMock()
-    nn.window_displays = {2: nn._editor}
+    nn._editor = MagicMock()          # the TextDisplay of grid 2's tab
+    nn._pane = MagicMock()            # the EditorPane of grid 2's tab
+    nn._pane.text_display = nn._editor
+    nn.grids.add_grid(2, nn._pane)  # grid 2 -> pane -> display
     nn.message_display = MagicMock()
     nn.statusline_display = MagicMock()
     return nn
@@ -82,9 +84,9 @@ class TestNvimNotificationsHandler:
 
     def test_known_method_is_dispatched(self, notif):
         """handler() calls the matching _h__* method with the notification params."""
-        notif.grids.register_window(2, 5)  # grid 2 (window id 5) already has notif._editor
+        notif.grids.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
         notif.handler("modified_changed", [5, True])
-        notif.main_window.set_tab_modified.assert_called_once_with(notif._editor, True)
+        notif.main_window.set_tab_modified.assert_called_once_with(2, True)
 
     def test_unknown_method_logs_error(self, notif, logs):
         """handler() logs an error for unknown methods and does not raise."""
@@ -121,20 +123,22 @@ class TestNvimNotificationsHandlers:
 
     def test_modified_changed(self, notif):
         """A modified change for a known window marks that window's tab."""
-        notif.grids.register_window(2, 5)  # grid 2 (window id 5) already has notif._editor
+        notif.grids.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
         notif._h__modified_changed(5, True)
-        notif.main_window.set_tab_modified.assert_called_once_with(notif._editor, True)
+        notif.main_window.set_tab_modified.assert_called_once_with(2, True)
 
     def test_window_buffer_known_window(self, notif):
-        """Buffer info for a known window sets that tab's buffer and label."""
-        notif.grids.register_window(2, 5)  # grid 2 (window id 5) already has notif._editor
+        """Buffer info for a known window records the buffer and refreshes the tab."""
+        notif.grids.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
         notif._h__window_buffer(5, 7, "/some/path")
-        notif.main_window.set_tab_buffer.assert_called_once_with(notif._editor, 7, "/some/path")
+        assert notif.grids.get_grid_by_buffer(7) == 2
+        assert notif.grids.get_entry_by_grid(2).filepath == "/some/path"
+        notif.main_window.refresh_tab.assert_called_once_with(2)
 
     def test_window_buffer_pending_for_unknown_window(self, notif):
         """Buffer info for a not-yet-known window is stashed until its win_pos arrives."""
         notif._h__window_buffer(99, 7, "/some/path")
-        notif.main_window.set_tab_buffer.assert_not_called()
+        notif.main_window.refresh_tab.assert_not_called()
         assert notif._pending_buffers[99] == (7, "/some/path")
 
 
@@ -259,46 +263,108 @@ class TestNvimNotificationsRedrawHandlers:
         """Routes adjust_viewport to the pane of the window grid, with the right arguments."""
         notif._n_redraw__win_viewport([2, {}, 10, 50, 25, 5, 100, 3])
         nvim_notifications.call_async.assert_called_once_with(
-            notif._editor.pane.adjust_viewport, 10, 50, 100, 5)
+            notif._pane.adjust_viewport, 10, 50, 100, 5)
 
 
 class TestGridRegistry:
 
     def test_global_grid_is_global(self):
         """Grid 1 is always classified as the global grid."""
-        assert GridRegistry().kind_of(1) == "global"
+        assert GridRegistry().get_kind_by_grid(1) == "global"
 
     def test_unknown_grid_is_a_window(self):
         """Any grid that is neither global nor the message grid is a window."""
-        assert GridRegistry().kind_of(2) == "window"
+        assert GridRegistry().get_kind_by_grid(2) == "window"
 
     def test_message_grid_is_classified(self):
         """A grid registered via set_message_grid is classified as the message grid."""
         reg = GridRegistry()
         reg.set_message_grid(3)
-        assert reg.kind_of(3) == "message"
-        assert reg.kind_of(2) == "window"
+        assert reg.get_kind_by_grid(3) == "message"
+        assert reg.get_kind_by_grid(2) == "window"
 
-    def test_get_grid_by_win_direct_lookup(self):
-        """get_grid_by_win resolves the grid from a window id without iterating."""
+    def test_add_grid_creates_entry_and_indexes_pane(self):
+        """add_grid creates an entry backed by the given pane and indexes it by pane."""
         reg = GridRegistry()
-        reg.register_window(2, 5)
-        reg.register_window(4, 9)
+        pane = object()
+        entry = reg.add_grid(2, pane)
+        assert entry.grid_id == 2
+        assert entry.pane is pane
+        assert reg.get_entry_by_grid(2) is entry
+        assert reg.get_pane_by_grid(2) is pane
+        assert reg.get_grid_by_pane(pane) == 2
+        assert reg.has_grid(2)
+
+    def test_set_win_direct_lookup(self):
+        """set_win indexes the window id so grid_of_win resolves it without iterating."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.add_grid(4, object())
+        reg.set_win(2, 5)
+        reg.set_win(4, 9)
         assert reg.get_grid_by_win(5) == 2
         assert reg.get_grid_by_win(9) == 4
         assert reg.get_grid_by_win(123) is None
+
+    def test_set_win_replaces_previous_id(self):
+        """Updating a grid's window id drops the stale reverse lookup."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.set_win(2, 5)
+        reg.set_win(2, 8)
+        assert reg.get_grid_by_win(5) is None
+        assert reg.get_grid_by_win(8) == 2
+
+    def test_set_buffer_records_buffer_and_path(self):
+        """set_buffer stores bufnr/filepath and indexes the owning grid by bufnr."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.set_buffer(2, 7, "/some/path")
+        assert reg.get_entry_by_grid(2).bufnr == 7
+        assert reg.get_entry_by_grid(2).filepath == "/some/path"
+        assert reg.get_grid_by_buffer(7) == 2
+
+    def test_set_buffer_keeps_first_owner(self):
+        """A second grid showing the same buffer does not steal ownership of the bufnr index."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.add_grid(4, object())
+        reg.set_buffer(2, 7, "/p")
+        reg.set_buffer(4, 7, "/p")
+        assert reg.get_grid_by_buffer(7) == 2
+
+    def test_has_path(self):
+        """has_path reports whether any window grid shows the given filepath."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.set_buffer(2, 7, "/some/path")
+        assert reg.has_path("/some/path")
+        assert not reg.has_path("/other")
+
+    def test_records_lists_all_windows(self):
+        """records() returns every window grid record."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.add_grid(4, object())
+        assert {r.grid_id for r in reg.get_all_entries()} == {2, 4}
 
     def test_forget_message_grid(self):
         """Forgetting the message grid reverts its classification to window."""
         reg = GridRegistry()
         reg.set_message_grid(3)
-        reg.forget(3)
-        assert reg.kind_of(3) == "window"
+        reg.forget_grid(3)
+        assert reg.get_kind_by_grid(3) == "window"
         assert reg.message_grid is None
 
-    def test_forget_window(self):
-        """Forgetting a window grid drops its reverse lookup."""
+    def test_forget_window_drops_all_lookups(self):
+        """Forgetting a window grid drops its win, buffer, and pane reverse lookups."""
         reg = GridRegistry()
-        reg.register_window(2, 5)
-        reg.forget(2)
+        pane = object()
+        reg.add_grid(2, pane)
+        reg.set_win(2, 5)
+        reg.set_buffer(2, 7, "/p")
+        reg.forget_grid(2)
+        assert reg.get_entry_by_grid(2) is None
         assert reg.get_grid_by_win(5) is None
+        assert reg.get_grid_by_buffer(7) is None
+        assert reg.get_grid_by_pane(pane) is None
