@@ -42,6 +42,7 @@ from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications
 from nysor.text_display import TextDisplay, MIN_COLS_ROWS
+from nysor.utils import call_async
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,7 @@ class MainMenu:
                 ("&Save", "file__save"),
                 ("&Save as...", "file__save_as"),
                 (None, None),
+                ("&Close Tab", "file__close_tab"),
                 ("E&xit", "file__exit"),
             ],
             "&Debug": [
@@ -287,6 +289,11 @@ class MainMenu:
             self._main_window.save_to_new_file(filename)
         else:
             logger.debug("Saving the buffer cancelled, no new name chosen")
+
+    @_log_action
+    def _on__file__close_tab(self):
+        """Close the currently active tab (its Neovim window)."""
+        call_async(self._main_window.close_active_tab)
 
     @_log_action
     def _on__file__exit(self):
@@ -674,9 +681,10 @@ class MainApp(QMainWindow):
         - if that buffer is still owned by another (live) tab -- i.e. we are cleaning up a
           duplicate we just collapsed -- drop this tab without touching the buffer;
         - if it has no unsaved changes, close the tab and delete the buffer in Neovim;
-        - if it has unsaved changes, abort the close: the buffer is still loaded (only its window
-          was closed), so re-show it in a new window, re-attach this same tab to it, and tell the
-          user to save (or use Neovim commands) first.
+        - if it has unsaved changes, we can't yet tell a plain ':close'/':q' (which just hides
+          the still-modified buffer) from a forced ':q!' (which discards the changes), because a
+          forced quit emits no 'modified_changed', so our cached pane.modified stays stale. Ask
+          Neovim for the buffer's real state and decide there (see _resolve_modified_close).
         While the app itself is quitting we only drop the tab (qall already prompts).
         """
         pane = entry.pane
@@ -692,11 +700,29 @@ class MainApp(QMainWindow):
             self.nvi.future_request("nvim_buf_delete", bufnr, {})
             return
 
-        # unsaved changes: abort the close -> the buffer is still loaded, re-show it in a new
-        # window (':sbuffer') and re-attach this same tab to that window
-        self._reattach_pending = pane
-        self.nvi.future_request("nvim_command", f"tab sbuffer {bufnr}")
-        self._show_close_aborted(entry.filepath)
+        call_async(self._resolve_modified_close, pane, bufnr, entry.filepath)
+
+    async def _resolve_modified_close(self, pane, bufnr, filepath):
+        """Decide what to do with a closed window whose buffer we still think is modified.
+
+        Our cached modified flag can't distinguish ':close'/':q' (the buffer stays loaded and
+        changed) from ':q!' (the changes are discarded and the buffer is unloaded), so we read the
+        buffer's real 'changed' state from Neovim:
+        - still changed  -> genuine ':close': abort by re-showing the buffer and re-attaching this
+          same tab, then tell the user to save first;
+        - not changed    -> the changes were discarded (':q!') or already saved: honor it, close
+          the tab and delete the (now dangling) buffer.
+        """
+        info = await self.nvi.call("nvim_call_function", "getbufinfo", [bufnr])
+        still_modified = bool(info) and info[0].get("changed")
+        if still_modified:
+            self._reattach_pending = pane
+            self.nvi.future_request("nvim_command", f"tab sbuffer {bufnr}")
+            self._show_close_aborted(filepath)
+        else:
+            self.destroy_editor_tab(pane)
+            if info:  # buffer still lingers (unloaded but listed) -> clean it up
+                self.nvi.future_request("nvim_buf_delete", bufnr, {})
 
     def _show_close_aborted(self, filepath):
         """Tell the user we kept a tab open because its buffer had unsaved changes."""
@@ -710,6 +736,68 @@ class MainApp(QMainWindow):
         )
         dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
         dlg.open()  # non-blocking; just informational
+
+    async def close_active_tab(self):
+        """Close the active tab from the GUI, prompting if its buffer has unsaved changes.
+
+        Closing the last remaining tab is really "quit the app", so it is routed to close_gui
+        (which drives ':qall', with its own unsaved-changes prompt). Otherwise we close just this
+        tab's Neovim window; the actual tab teardown happens in on_editor_window_closed when the
+        resulting 'grid_destroy' arrives.
+        """
+        if self.text_display is None:
+            return
+        if self.tabs.count() <= 1:
+            self.close_gui()
+            return
+        grid = self.grids.get_grid_by_pane(self.text_display.pane)
+        entry = self.grids.get_entry_by_grid(grid)
+        if entry is None or entry.win_id is None:
+            logger.warning("close_active_tab with no known Neovim window for the active tab")
+            return
+
+        if entry.pane.modified:
+            choice = await self._ask_close_modified(entry.filepath)
+            if choice == "cancel":
+                return
+            if choice == "save":
+                # write this window's buffer first, then close it (order is preserved: the write
+                # request is sent before the close one)
+                self.nvi.future_request(
+                    "nvim_call_function", "win_execute", [entry.win_id, "write"])
+            elif choice == "discard":
+                # run ':q!' in this window to drop the unsaved changes and close it (note
+                # nvim_win_close(force=True) would NOT discard: it just hides the buffer, still
+                # changed). The resulting grid_destroy tears the tab down.
+                self.nvi.future_request(
+                    "nvim_call_function", "win_execute", [entry.win_id, "q!"])
+                return
+        self.nvi.future_request("nvim_win_close", entry.win_id, False)
+
+    async def _ask_close_modified(self, filepath):
+        """Ask the user how to close a tab with unsaved changes; return save/discard/cancel."""
+        name = os.path.basename(filepath) if filepath else "[No Name]"
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Icon.Warning)
+        dlg.setWindowTitle("Unsaved changes")
+        dlg.setText(f"{name!r} has unsaved changes.")
+        dlg.setInformativeText("Save it before closing the tab?")
+        save_btn = dlg.addButton(QMessageBox.StandardButton.Save)
+        discard_btn = dlg.addButton(QMessageBox.StandardButton.Discard)
+        dlg.addButton(QMessageBox.StandardButton.Cancel)
+        dlg.setDefaultButton(save_btn)
+
+        answered = asyncio.Event()
+        dlg.finished.connect(lambda _result: answered.set())
+        dlg.open()  # non-blocking, so the async loop keeps running while the user decides
+        await answered.wait()
+
+        clicked = dlg.clickedButton()
+        if clicked is save_btn:
+            return "save"
+        if clicked is discard_btn:
+            return "discard"
+        return "cancel"
 
     def set_active_editor(self, grid_id):
         """Make the given window grid's tab the active one (select its tab and focus it).
