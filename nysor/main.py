@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollBar,
@@ -244,51 +245,24 @@ class MainMenu:
 
     @_log_action
     def _on__file__open(self):
-        """Open a file."""
-        # FIXME.90 -- for multibuffers, logic will change here:
-        # - if current buffer has any content, open the new file in a new panel
-        # - if current is empty, replace it
-
-        if self._main_window.state_buffer_is_modified:
-            dlg = QMessageBox(self._main_window)
-            dlg.setIcon(QMessageBox.Icon.Warning)
-            dlg.setWindowTitle("Cannot open new file")
-            dlg.setText(
-                "Current buffer is not saved, cannot open a new file to replace it. "
-                "Save the current buffer and try again."
-            )
-            dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
-            dlg.exec()
-            return
-
-        # indeed open a new file
+        """Open a file (in a new tab; see MainApp.open_file)."""
         filename, _ = QFileDialog.getOpenFileName(self._main_window, "Open File", "", "")
         if filename:
             self._main_window.open_file(filename)
 
     @_log_action
     def _on__file__save(self):
-        """Save the buffer in the current file."""
+        """Save the active buffer, asking for a name if it does not have one yet."""
         if self._main_window.active_filepath():
             logger.debug("Saving the buffer directly with current name")
             self._main_window.buffer_save()
         else:
-            filename, _ = QFileDialog.getSaveFileName(self._main_window, "Save File", "", "")
-            if filename:
-                logger.debug("Saving the buffer with new name {!r}", filename)
-                self._main_window.save_to_new_file(filename)
-            else:
-                logger.debug("Saving the buffer cancelled, no new name chosen")
+            self._main_window.save_active_as()
 
     @_log_action
     def _on__file__save_as(self):
-        """Save the buffer in a new file."""
-        filename, _ = QFileDialog.getSaveFileName(self._main_window, "Save File", "", "")
-        if filename:
-            logger.debug("Saving the buffer with new name {!r}", filename)
-            self._main_window.save_to_new_file(filename)
-        else:
-            logger.debug("Saving the buffer cancelled, no new name chosen")
+        """Save the active buffer to a new file."""
+        self._main_window.save_active_as()
 
     @_log_action
     def _on__file__close_tab(self):
@@ -519,6 +493,11 @@ class MainApp(QMainWindow):
         # switching a tab from the GUI must move Neovim (see _on_tab_changed)
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
+        # right-clicking a tab offers per-tab File actions (see _show_tab_menu)
+        tab_bar = self.tabs.tabBar()
+        tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        tab_bar.customContextMenuRequested.connect(self._show_tab_menu)
+
         # editor-wide font and cursor mode: owned here (the editor layer), remembered so tabs
         # created later start with the right values
         self._editor_font = None
@@ -559,14 +538,16 @@ class MainApp(QMainWindow):
         self._menu.actions["file__save"].setEnabled(is_modified)
         self._menu.actions["file__open"].setEnabled(not is_modified)
 
-    def active_filepath(self):
-        """Return the filepath shown in the active tab, or None."""
+    def _active_entry(self):
+        """Return the GridEntry backing the active tab, or None."""
         if self.text_display is None:
             return None
-        # C! Tenías razón: get_grid_by_pane devuelve None si el pane no está, y
-        # get_entry_by_grid(None) es _by_grid.get(None) -> None, así que la guarda sobra.
         grid = self.grids.get_grid_by_pane(self.text_display.pane)
-        entry = self.grids.get_entry_by_grid(grid)
+        return self.grids.get_entry_by_grid(grid)
+
+    def active_filepath(self):
+        """Return the filepath shown in the active tab, or None."""
+        entry = self._active_entry()
         return entry.filepath if entry is not None else None
 
     def _refresh_tab_label(self, grid_id):
@@ -738,22 +719,22 @@ class MainApp(QMainWindow):
         dlg.open()  # non-blocking; just informational
 
     async def close_active_tab(self):
-        """Close the active tab from the GUI, prompting if its buffer has unsaved changes.
+        """Close the active tab (see close_tab)."""
+        await self.close_tab(self._active_entry())
+
+    async def close_tab(self, entry):
+        """Close a tab from the GUI, prompting if its buffer has unsaved changes.
 
         Closing the last remaining tab is really "quit the app", so it is routed to close_gui
         (which drives ':qall', with its own unsaved-changes prompt). Otherwise we close just this
         tab's Neovim window; the actual tab teardown happens in on_editor_window_closed when the
         resulting 'grid_destroy' arrives.
         """
-        if self.text_display is None:
-            return
         if self.tabs.count() <= 1:
             self.close_gui()
             return
-        grid = self.grids.get_grid_by_pane(self.text_display.pane)
-        entry = self.grids.get_entry_by_grid(grid)
         if entry is None or entry.win_id is None:
-            logger.warning("close_active_tab with no known Neovim window for the active tab")
+            logger.warning("close_tab with no known Neovim window for the tab")
             return
 
         if entry.pane.modified:
@@ -798,6 +779,78 @@ class MainApp(QMainWindow):
         if clicked is discard_btn:
             return "discard"
         return "cancel"
+
+    def _show_tab_menu(self, pos):
+        """Show the per-tab context menu (Save / Save As / Close) for the right-clicked tab."""
+        tab_bar = self.tabs.tabBar()
+        index = tab_bar.tabAt(pos)
+        if index == -1:
+            return
+        entry = self.grids.get_entry_by_grid(self.grids.get_grid_by_pane(self.tabs.widget(index)))
+
+        menu = QMenu(self)
+        save_act = menu.addAction("Save")
+        save_act.setEnabled(entry is not None and entry.pane.modified)
+        save_as_act = menu.addAction("Save As...")
+        save_as_act.setEnabled(entry is not None)
+        menu.addSeparator()
+        close_act = menu.addAction("Close")
+        chosen = menu.exec(tab_bar.mapToGlobal(pos))
+
+        if chosen is save_act:
+            self._save_tab(entry)
+        elif chosen is save_as_act:
+            self._save_entry_as(entry)
+        elif chosen is close_act:
+            call_async(self.close_tab, entry)
+
+    def save_active_as(self):
+        """Save the active buffer to a new filename (menu-bar Save As / Save on an unnamed one)."""
+        self._save_entry_as(self._active_entry())
+
+    def _save_tab(self, entry):
+        """Write the given tab's buffer; if it has no filename yet, ask for one."""
+        if entry is None or entry.win_id is None:
+            return
+        if entry.filepath:
+            self.nvi.future_request("nvim_call_function", "win_execute", [entry.win_id, "write"])
+        else:
+            self._save_entry_as(entry)
+
+    def _save_entry_as(self, entry):
+        """Save a tab's buffer to a user-chosen filename, confirming overwrite ourselves.
+
+        We turn off QFileDialog's own overwrite confirmation and ask instead, because the write
+        goes through 'saveas!' (bang): the bang is needed so Neovim does not refuse an existing
+        file, but then the only overwrite guard left is ours.
+        """
+        if entry is None or entry.win_id is None:
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self, "Save File", "", "", options=QFileDialog.Option.DontConfirmOverwrite)
+        # C? no entiendo para qué el DontConfirmOverwrite ... si lo sacamos, PyQt hace lo correcto, y si devuelve un `filename` es que o eligió un nuevo nombre o dio ok a sobreescribir...
+        if not filename:
+            return
+        if os.path.exists(filename) and not self._confirm_overwrite(filename):
+            return
+        # run 'saveas!' in that window's context (it may not be the active one); going through
+        # vim.cmd.saveas lets Neovim escape the path, and the bang overwrites the (confirmed) file
+        lua = "local w, f = ...\nvim.api.nvim_win_call(w, function()"\
+              " vim.cmd.saveas({args = {f}, bang = true}) end)"
+        # C? el script armalo con indentaciones elegantes y en una triple quote (fijate otras llamadas a nvim_exec_lua en este archivo)
+        self.nvi.future_request("nvim_exec_lua", lua, [entry.win_id, filename])
+
+    def _confirm_overwrite(self, filename):
+        """Ask the user to confirm overwriting an existing file; return True to proceed."""
+        name = os.path.basename(filename)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Icon.Warning)
+        dlg.setWindowTitle("Overwrite file?")
+        dlg.setText(f"{name!r} already exists.")
+        dlg.setInformativeText("Are you sure you want to overwrite it?")
+        dlg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dlg.setDefaultButton(QMessageBox.StandardButton.No)
+        return dlg.exec() == QMessageBox.StandardButton.Yes
 
     def set_active_editor(self, grid_id):
         """Make the given window grid's tab the active one (select its tab and focus it).
@@ -1036,16 +1089,18 @@ class MainApp(QMainWindow):
     # -- set of functions to interact with buffers/neovim
 
     def open_file(self, filename):
-        """Tell neovim to open a file and load into current buffer."""
-        self.nvi.future_request("nvim_command", f"edit {filename}")
+        """Open a file in a new tab, reusing the active tab only if it is an empty unnamed buffer.
+
+        Using nvim_cmd with structured args lets Neovim escape the path (spaces, etc.) for us.
+        """
+        entry = self._active_entry()
+        reuse = entry is not None and not entry.filepath and not entry.pane.modified
+        cmd = "edit" if reuse else "tabedit"
+        self.nvi.future_request("nvim_cmd", {"cmd": cmd, "args": [filename]}, {"output": False})
 
     def buffer_save(self):
         """Save the current buffer."""
         self.nvi.future_request("nvim_command", "write")
-
-    def save_to_new_file(self, filename):
-        """Save current buffer to a new filename."""
-        self.nvi.future_request("nvim_command", f"saveas {filename}")
 
 
 def start():
