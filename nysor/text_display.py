@@ -173,7 +173,7 @@ class BaseDisplay(QWidget):
 
         action = "press"
         modifier = self._get_button_modifiers(event)
-        grid = 0  # FIXME.90: may change when multi-edit?
+        grid = self._grid_id()
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -199,7 +199,7 @@ class BaseDisplay(QWidget):
 
         action = "release"
         modifier = self._get_button_modifiers(event)
-        grid = 0  # FIXME.90: may change when multi-edit?
+        grid = self._grid_id()
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -223,7 +223,7 @@ class BaseDisplay(QWidget):
         button_name = "left"
         action = "drag"
         modifier = self._get_button_modifiers(event)
-        grid = 0  # FIXME.90: may change when multi-edit?
+        grid = self._grid_id()
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -248,7 +248,7 @@ class BaseDisplay(QWidget):
         dx, dy = qpoint.x(), qpoint.y()
         trigger_limit = 10
         row, col = 0, 0  # seems to be ignored
-        grid = 0  # FIXME.90: may change when multi-edit?
+        grid = self._grid_id()
 
         if abs(dx) > trigger_limit:
             action = "right" if dx > 0 else "left"
@@ -263,6 +263,16 @@ class BaseDisplay(QWidget):
             self.main_window.nvi.future_request(
                 "nvim_input_mouse", button_name, action, modifier, grid, row, col
             )
+
+    def _grid_id(self):
+        """Return this display's Neovim grid id, looked up in the registry.
+
+        Only interactive editor displays (which have a `pane`) send mouse input; the registry maps
+        that pane to its grid. Falls back to 0 (the global grid) if the window is not tracked yet.
+        """
+        grid = self.main_window.grids.get_grid_by_pane(self.pane)
+        # C? si no tenemos el pane en el 'grids' tenemos todo muy roto, no? creo que prefiero en este caso fallar y no devolver un valor falso que puede ser muy confuso... o sea, no es mejor hacer `assert grid is not None`?
+        return grid if grid is not None else 0
 
     def _get_grid_cell(self, x: int, y: int):
         """Return grid's row and column from pixels x and y."""
