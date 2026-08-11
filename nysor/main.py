@@ -202,9 +202,9 @@ class MainMenu:
         self._menu_bar = main_window.menuBar()
         self.actions = {}
 
-        # FIXME.90 -- for multibuffers we need also a "New" option here
         menu_structure = {
             "&File": [
+                ("&New", "file__new"),
                 ("&Open", "file__open"),
                 ("&Save", "file__save"),
                 ("&Save as...", "file__save_as"),
@@ -244,11 +244,14 @@ class MainMenu:
         return _f
 
     @_log_action
+    def _on__file__new(self):
+        """Open a new empty tab."""
+        self._main_window.new_file()
+
+    @_log_action
     def _on__file__open(self):
         """Open a file (in a new tab; see MainApp.open_file)."""
-        filename, _ = QFileDialog.getOpenFileName(self._main_window, "Open File", "", "")
-        if filename:
-            self._main_window.open_file(filename)
+        self._main_window.open_file_dialog()
 
     @_log_action
     def _on__file__save(self):
@@ -493,10 +496,14 @@ class MainApp(QMainWindow):
         # switching a tab from the GUI must move Neovim (see _on_tab_changed)
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
-        # right-clicking a tab offers per-tab File actions (see _show_tab_menu)
+        # right-clicking a tab offers per-tab File actions (see _show_tab_menu); the tab bar only
+        # spans the tabs themselves, so right-clicking the empty part of the header row reaches the
+        # QTabWidget instead and offers New/Open (see _show_new_open_menu)
         tab_bar = self.tabs.tabBar()
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._show_tab_menu)
+        self.tabs.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.tabs.customContextMenuRequested.connect(self._show_new_open_menu)
 
         # editor-wide font and cursor mode: owned here (the editor layer), remembered so tabs
         # created later start with the right values
@@ -780,6 +787,26 @@ class MainApp(QMainWindow):
             return "discard"
         return "cancel"
 
+    def _show_new_open_menu(self, pos):
+        """Show a New/Open context menu when the empty part of the tab-bar row is right-clicked.
+
+        This handler is on the whole QTabWidget, so it also fires for right-clicks on the page
+        area (the editor); we ignore those (only the header row, above the pages, is ours) and let
+        the editor handle its own. `pos` is in the QTabWidget's coordinates.
+        """
+        if pos.y() > self.tabs.tabBar().height():
+            return  # below the tab-bar row -> the editor area, not our menu
+
+        menu = QMenu(self)
+        new_act = menu.addAction("New")
+        open_act = menu.addAction("Open...")
+        chosen = menu.exec(self.tabs.mapToGlobal(pos))
+
+        if chosen is new_act:
+            self.new_file()
+        elif chosen is open_act:
+            self.open_file_dialog()
+
     def _show_tab_menu(self, pos):
         """Show the per-tab context menu (Save / Save As / Close) for the right-clicked tab."""
         tab_bar = self.tabs.tabBar()
@@ -818,39 +845,26 @@ class MainApp(QMainWindow):
             self._save_entry_as(entry)
 
     def _save_entry_as(self, entry):
-        """Save a tab's buffer to a user-chosen filename, confirming overwrite ourselves.
+        """Save a tab's buffer to a user-chosen filename.
 
-        We turn off QFileDialog's own overwrite confirmation and ask instead, because the write
-        goes through 'saveas!' (bang): the bang is needed so Neovim does not refuse an existing
-        file, but then the only overwrite guard left is ours.
+        QFileDialog already confirms overwriting an existing file, so a returned filename means
+        the user picked a fresh name or approved the overwrite; we then write with 'saveas!' (the
+        bang only stops Neovim from refusing the -already approved- existing file).
         """
         if entry is None or entry.win_id is None:
             return
-        filename, _ = QFileDialog.getSaveFileName(
-            self, "Save File", "", "", options=QFileDialog.Option.DontConfirmOverwrite)
-        # C? no entiendo para qué el DontConfirmOverwrite ... si lo sacamos, PyQt hace lo correcto, y si devuelve un `filename` es que o eligió un nuevo nombre o dio ok a sobreescribir...
+        filename, _ = QFileDialog.getSaveFileName(self, "Save File", "", "")
         if not filename:
             return
-        if os.path.exists(filename) and not self._confirm_overwrite(filename):
-            return
-        # run 'saveas!' in that window's context (it may not be the active one); going through
-        # vim.cmd.saveas lets Neovim escape the path, and the bang overwrites the (confirmed) file
-        lua = "local w, f = ...\nvim.api.nvim_win_call(w, function()"\
-              " vim.cmd.saveas({args = {f}, bang = true}) end)"
-        # C? el script armalo con indentaciones elegantes y en una triple quote (fijate otras llamadas a nvim_exec_lua en este archivo)
-        self.nvi.future_request("nvim_exec_lua", lua, [entry.win_id, filename])
-
-    def _confirm_overwrite(self, filename):
-        """Ask the user to confirm overwriting an existing file; return True to proceed."""
-        name = os.path.basename(filename)
-        dlg = QMessageBox(self)
-        dlg.setIcon(QMessageBox.Icon.Warning)
-        dlg.setWindowTitle("Overwrite file?")
-        dlg.setText(f"{name!r} already exists.")
-        dlg.setInformativeText("Are you sure you want to overwrite it?")
-        dlg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        dlg.setDefaultButton(QMessageBox.StandardButton.No)
-        return dlg.exec() == QMessageBox.StandardButton.Yes
+        # run 'saveas!' in that window's context (it may not be the active one); vim.cmd.saveas
+        # lets Neovim escape the path, and the bang overwrites the file the dialog confirmed
+        _code = """
+            local win, fname = ...
+            vim.api.nvim_win_call(win, function()
+                vim.cmd.saveas({args = {fname}, bang = true})
+            end)
+        """
+        self.nvi.future_request("nvim_exec_lua", _code, [entry.win_id, filename])
 
     def set_active_editor(self, grid_id):
         """Make the given window grid's tab the active one (select its tab and focus it).
@@ -1087,6 +1101,16 @@ class MainApp(QMainWindow):
         log_notdone("Mouse context window!")
 
     # -- set of functions to interact with buffers/neovim
+
+    def new_file(self):
+        """Open a new empty unnamed buffer in a new tab."""
+        self.nvi.future_request("nvim_command", "tabnew")
+
+    def open_file_dialog(self):
+        """Ask the user for a file and open it (in a new tab; see open_file)."""
+        filename, _ = QFileDialog.getOpenFileName(self, "Open File", "", "")
+        if filename:
+            self.open_file(filename)
 
     def open_file(self, filename):
         """Open a file in a new tab, reusing the active tab only if it is an empty unnamed buffer.
