@@ -913,12 +913,15 @@ class MainApp(QMainWindow):
         self._resize_global_grid()
 
     def changeEvent(self, event):
-        """Re-check files on disk when the window regains focus (e.g. after a terminal edit)."""
+        """Re-check the visible file on disk when the window regains focus (e.g. terminal edit)."""
         super().changeEvent(event)
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
-            # ':checktime' notices files changed on disk and lets Neovim prompt what to do (load /
-            # ignore / ...); fire-and-forget so we never block on that prompt
-            self.nvi.future_request("nvim_command", "checktime")
+            # only check the buffer the user is actually looking at (the active tab == Neovim's
+            # current buffer); a change to some other tab's file is caught when they switch to it
+            # (the BufEnter autocmd). checktime lets Neovim prompt (load / ignore / ...); fire-and-
+            # forget so we never block on that prompt
+            _code = "vim.cmd.checktime({ args = { tostring(vim.api.nvim_get_current_buf()) } })"
+            self.nvi.future_request("nvim_exec_lua", _code, [])
 
     def _resize_global_grid(self):
         """Tell Neovim the global grid size, computed from the full editing area.
