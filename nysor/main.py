@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtGui import QIcon, QAction
 
 
@@ -912,6 +912,14 @@ class MainApp(QMainWindow):
         super().resizeEvent(event)
         self._resize_global_grid()
 
+    def changeEvent(self, event):
+        """Re-check files on disk when the window regains focus (e.g. after a terminal edit)."""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            # ':checktime' notices files changed on disk and lets Neovim prompt what to do (load /
+            # ignore / ...); fire-and-forget so we never block on that prompt
+            self.nvi.future_request("nvim_command", "checktime")
+
     def _resize_global_grid(self):
         """Tell Neovim the global grid size, computed from the full editing area.
 
@@ -986,6 +994,19 @@ class MainApp(QMainWindow):
                     vim.rpcnotify({self.nvi.channel_id}, 'modified_changed', win, vim.bo.modified)
                 end
             }})
+        """
+        await self.nvi.call("nvim_exec_lua", _code, [])
+
+        # notice files changed on disk behind our back and let Neovim ask what to do (load /
+        # ignore / ...): keep autoread OFF (it defaults ON) so 'checktime' prompts instead of
+        # silently reloading, and re-check a buffer whenever it is entered (this refreshes a tab
+        # when the user switches to it); regaining window focus re-checks all buffers too (see
+        # changeEvent -> ':checktime')
+        _code = """
+            vim.o.autoread = false
+            vim.api.nvim_create_autocmd('BufEnter', {
+                callback = function(ev) vim.cmd.checktime({ args = { tostring(ev.buf) } }) end,
+            })
         """
         await self.nvi.call("nvim_exec_lua", _code, [])
         self._sync_menu_state()  # initial menu state (no active tab modified yet)

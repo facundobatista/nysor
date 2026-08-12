@@ -267,12 +267,13 @@ class BaseDisplay(QWidget):
     def _grid_id(self):
         """Return this display's Neovim grid id, looked up in the registry.
 
-        Only interactive editor displays (which have a `pane`) send mouse input; the registry maps
-        that pane to its grid. Falls back to 0 (the global grid) if the window is not tracked yet.
+        Only interactive editor displays (which have a `pane`) send mouse input, and by the time
+        one can be clicked its window is registered. A missing mapping is thus a broken invariant,
+        not a normal case.
         """
         grid = self.main_window.grids.get_grid_by_pane(self.pane)
-        # C? si no tenemos el pane en el 'grids' tenemos todo muy roto, no? creo que prefiero en este caso fallar y no devolver un valor falso que puede ser muy confuso... o sea, no es mejor hacer `assert grid is not None`?
-        return grid if grid is not None else 0
+        assert grid is not None, "mouse event on a display whose pane is not in the grid registry"
+        return grid
 
     def _get_grid_cell(self, x: int, y: int):
         """Return grid's row and column from pixels x and y."""
