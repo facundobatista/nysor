@@ -442,6 +442,38 @@ class EditorPane(QWidget):
         self.main_window.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
 
 
+class DetachedWindow(QMainWindow):
+    """An editor pane pulled out of the tab strip into its own OS window.
+
+    This is a purely-Qt move: the EditorPane is reparented here, no Neovim windows/buffers change.
+    Because Neovim (under multigrid) only draws the current tabpage, only the focused editor is
+    live; the others (tabs or detached windows) show their last content until focused again.
+    Focusing this window makes its pane the active one (via the same win_gotoid used for tabs);
+    closing it re-attaches the pane as a tab (it does NOT close the buffer -- ':q' does that).
+    """
+
+    def __init__(self, app, pane):
+        super().__init__()
+        self._app = app
+        self._pane = pane
+        self.setCentralWidget(pane)
+        pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
+
+    def changeEvent(self, event):
+        """When this window gains focus, make its pane the active editor."""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self._app.activate_pane(self._pane)
+
+    def closeEvent(self, event):
+        """Re-attach the pane as a tab instead of destroying it (unless the app is quitting)."""
+        if self._app.is_closing():
+            event.accept()  # the whole app is going down; let this window close
+            return
+        event.ignore()
+        self._app.reattach_pane(self._pane)
+
+
 class MainApp(QMainWindow):
     """The main application window."""
 
@@ -455,6 +487,10 @@ class MainApp(QMainWindow):
         self.state_buffer_is_modified = False
         # a pane kept aside while its buffer is reopened, to re-attach to the new window
         self._reattach_pending = None
+        # panes pulled out of the tab strip into their own OS window (pane -> DetachedWindow)
+        self._detached = {}
+        # set while detaching so removing the tab does not bounce activation to a sibling tab
+        self._suppress_tab_activation = False
         self.nvim_notifs = NvimNotifications(self)
         self.grids = self.nvim_notifs.grids  # the central registry (single source of truth)
 
@@ -558,18 +594,21 @@ class MainApp(QMainWindow):
         return entry.filepath if entry is not None else None
 
     def _refresh_tab_label(self, grid_id):
-        """Rebuild a window grid's tab label from its filepath plus a modified marker."""
+        """Rebuild a window grid's label (tab text or detached-window title) from its filepath."""
         entry = self.grids.get_entry_by_grid(grid_id)
         if entry is None:
             logger.warning("_refresh_tab_label for a grid with no entry: {}", grid_id)
             return
-        index = self.tabs.indexOf(entry.pane)
-        if index == -1:
-            return
         name = os.path.basename(entry.filepath) if entry.filepath else "[No Name]"
         if entry.pane.modified:
             name = f"● {name}"
-        self.tabs.setTabText(index, name)
+        window = self._detached.get(entry.pane)
+        if window is not None:
+            window.setWindowTitle(name)
+            return
+        index = self.tabs.indexOf(entry.pane)
+        if index != -1:
+            self.tabs.setTabText(index, name)
 
     def refresh_tab(self, grid_id):
         """Update a window grid's tab after its buffer/filepath changed, enforcing one-per-buffer.
@@ -609,8 +648,10 @@ class MainApp(QMainWindow):
             self._sync_menu_state()
 
     def _editor_displays(self):
-        """Return every editor display currently held in a tab."""
-        return [self.tabs.widget(i).text_display for i in range(self.tabs.count())]
+        """Return every editor display, whether held in a tab or in a detached window."""
+        tabbed = [self.tabs.widget(i).text_display for i in range(self.tabs.count())]
+        detached = [pane.text_display for pane in self._detached]
+        return tabbed + detached
 
     def set_editor_font(self, name, size):
         """Set the font for all editor displays and the strips, and remember it for new tabs."""
@@ -651,12 +692,16 @@ class MainApp(QMainWindow):
         return pane.text_display
 
     def destroy_editor_tab(self, pane):
-        """Remove the tab holding the given editor pane."""
+        """Remove the given editor pane, whether it lives in a tab or a detached window."""
         pane.closed = True  # in-flight async work (e.g. adjust_viewport) must bail out
-        index = self.tabs.indexOf(pane)
-        if index != -1:
-            self.tabs.removeTab(index)
-        pane.deleteLater()
+        window = self._detached.pop(pane, None)
+        if window is not None:
+            window.deleteLater()  # deletes the detached window together with its child pane
+        else:
+            index = self.tabs.indexOf(pane)
+            if index != -1:
+                self.tabs.removeTab(index)
+            pane.deleteLater()
         if self.text_display is pane.text_display:
             current = self.tabs.currentWidget()
             self.text_display = current.text_display if current is not None else None
@@ -732,12 +777,12 @@ class MainApp(QMainWindow):
     async def close_tab(self, entry):
         """Close a tab from the GUI, prompting if its buffer has unsaved changes.
 
-        Closing the last remaining tab is really "quit the app", so it is routed to close_gui
-        (which drives ':qall', with its own unsaved-changes prompt). Otherwise we close just this
-        tab's Neovim window; the actual tab teardown happens in on_editor_window_closed when the
-        resulting 'grid_destroy' arrives.
+        Closing the last remaining pane (counting detached windows) is really "quit the app", so it
+        is routed to close_gui (which drives ':qall', with its own unsaved-changes prompt).
+        Otherwise we close just this pane's Neovim window; the actual teardown happens in
+        on_editor_window_closed when the resulting 'grid_destroy' arrives.
         """
-        if self.tabs.count() <= 1:
+        if self.tabs.count() + len(self._detached) <= 1:
             self.close_gui()
             return
         if entry is None or entry.win_id is None:
@@ -821,6 +866,8 @@ class MainApp(QMainWindow):
         save_as_act = menu.addAction("Save As...")
         save_as_act.setEnabled(entry is not None)
         menu.addSeparator()
+        detach_act = menu.addAction("Detach")
+        detach_act.setEnabled(entry is not None)
         close_act = menu.addAction("Close")
         chosen = menu.exec(tab_bar.mapToGlobal(pos))
 
@@ -828,6 +875,8 @@ class MainApp(QMainWindow):
             self._save_tab(entry)
         elif chosen is save_as_act:
             self._save_entry_as(entry)
+        elif chosen is detach_act:
+            self.detach_tab(entry)
         elif chosen is close_act:
             call_async(self.close_tab, entry)
 
@@ -867,45 +916,94 @@ class MainApp(QMainWindow):
         self.nvi.future_request("nvim_exec_lua", _code, [entry.win_id, filename])
 
     def set_active_editor(self, grid_id):
-        """Make the given window grid's tab the active one (select its tab and focus it).
+        """Bring the given window grid's pane to the front and focus it (Neovim -> GUI).
 
-        Note text_display is updated *before* selecting the tab, so the currentChanged that this
-        emits is recognized as already-active by _on_tab_changed (no bounce back to Neovim).
+        The pane may live in a tab (select it) or in a detached window (raise it). text_display is
+        updated *before* bringing it forward, so the activation this triggers is recognized as
+        already-active by activate_pane and does not bounce back to Neovim.
         """
         entry = self.grids.get_entry_by_grid(grid_id)
         if entry is None:
             logger.warning("set_active_editor for a grid with no entry: {}", grid_id)
             return
         pane = entry.pane
-        index = self.tabs.indexOf(pane)
-        if index == -1:
-            logger.warning("set_active_editor for a pane that is not a tab")
-            return
         self.text_display = pane.text_display
-        if self.tabs.currentIndex() != index:  # not an error: may already be current
-            self.tabs.setCurrentIndex(index)
+        window = self._detached.get(pane)
+        if window is not None:
+            window.raise_()
+            window.activateWindow()
+        else:
+            index = self.tabs.indexOf(pane)
+            if index == -1:
+                logger.warning("set_active_editor for a pane that is neither a tab nor detached")
+                return
+            if self.tabs.currentIndex() != index:  # not an error: may already be current
+                self.tabs.setCurrentIndex(index)
         pane.text_display.setFocus()
-        self._sync_menu_state()  # the file menu follows the newly active tab
+        self._sync_menu_state()  # the file menu follows the newly active editor
 
-    def _on_tab_changed(self, index):
-        """When the user switches tab in the GUI, move Neovim to that tab's window.
+    def activate_pane(self, pane):
+        """Make the given pane the active editor by switching Neovim to its window (GUI -> Neovim).
 
-        Neovim-driven switches emit this too (set_active_editor selects the tab), but by then the
-        target pane is already the active one, so we detect that and don't bounce back to Neovim.
+        Triggered when the user focuses a pane -- clicking a tab (see _on_tab_changed) or a
+        detached window (DetachedWindow.changeEvent). Neovim-driven switches call in here too, but
+        by then the pane is already the active one, so we detect that and do not bounce back.
         """
-        pane = self.tabs.widget(index)
-        if pane is None or self.text_display is None:
-            return  # no current tab / no active display: only while tearing down, nothing to do
-        if pane is self.text_display.pane:
-            return  # Neovim already drove this switch; nothing to send back
+        if self.text_display is not None and pane is self.text_display.pane:
+            return  # already active; nothing to send back to Neovim
         grid = self.grids.get_grid_by_pane(pane)
         entry = self.grids.get_entry_by_grid(grid)
         if entry is None or entry.win_id is None:
-            # a switchable tab should always have its Neovim window known by now
-            logger.warning("GUI switched to tab {} with no known Neovim window", index)
+            # a focusable pane should always have its Neovim window known by now
+            logger.warning("focused a pane with no known Neovim window")
             return
         # win_gotoid takes the plain window id and switches window (and its tabpage)
         self.nvi.future_request("nvim_call_function", "win_gotoid", [entry.win_id])
+
+    def _on_tab_changed(self, index):
+        """When the user switches tab in the GUI, make that tab's pane the active editor."""
+        if self._suppress_tab_activation:
+            return  # a detach is shuffling tabs; the detached pane stays the active one
+        pane = self.tabs.widget(index)
+        if pane is None or self.text_display is None:
+            return  # no current tab / no active display: only while tearing down, nothing to do
+        self.activate_pane(pane)
+
+    def detach_tab(self, entry):
+        """Pull a tab's editor pane out into its own OS window (see DetachedWindow)."""
+        if entry is None:
+            return
+        pane = entry.pane
+        if pane in self._detached:
+            return  # already detached
+        index = self.tabs.indexOf(pane)
+        if index == -1:
+            return
+        # keep this pane the active one: suppress the activation that removing its tab would bounce
+        # to a sibling (if it was the active tab, Neovim should stay on it, now in its own window)
+        self._suppress_tab_activation = True
+        self.tabs.removeTab(index)  # reparents the pane out; may switch the current tab
+        self._suppress_tab_activation = False
+        window = DetachedWindow(self, pane)  # setCentralWidget reparents the pane into it
+        self._detached[pane] = window
+        window.resize(self.size())  # roughly the main window size, so the grid is not clipped
+        self._refresh_tab_label(entry.grid_id)  # now routes to the detached window's title
+        window.show()
+        window.raise_()
+        window.activateWindow()  # focusing it activates the pane (via changeEvent -> win_gotoid)
+
+    def reattach_pane(self, pane):
+        """Move a detached pane back into the tab strip and drop its window."""
+        window = self._detached.pop(pane, None)
+        if window is None:
+            return
+        window.takeCentralWidget()  # release the pane from the window without deleting it
+        index = self.tabs.addTab(pane, "[No Name]")
+        window.deleteLater()
+        grid = self.grids.get_grid_by_pane(pane)
+        if grid is not None:
+            self._refresh_tab_label(grid)  # restore the proper tab label and modified marker
+        self.tabs.setCurrentIndex(index)  # bring it to front (activates it via _on_tab_changed)
 
     def resizeEvent(self, event):
         """Resize Neovim's global grid to the whole editing area on a window resize."""
@@ -929,8 +1027,12 @@ class MainApp(QMainWindow):
         This is driven by the window size (not the editor tab's size), so a strip growing or
         shrinking a tab never feeds back into a resize (which used to loop, e.g. on a swap-file
         prompt). Neovim carves the statusline/message rows out of this global size itself.
+
+        It uses the main window's tab area (not the active display, which may be a detached window)
+        so detaching/activating a floating window never changes the global grid size.
         """
-        display = self.text_display
+        display = self.tabs.currentWidget()
+        display = display.text_display if display is not None else None
         if display is None or display.font_size is None:
             return
         font_size = display.font_size
@@ -1081,6 +1183,10 @@ class MainApp(QMainWindow):
             logger.debug("Shutdown requested by nvim interface")
             self._closing = 2
             self.close()
+
+    def is_closing(self):
+        """Whether the application has started (or finished) its shutdown sequence."""
+        return self._closing != 0
 
     def close_gui(self, event=None):
         """Close Neovim and then let the rest to finish.
