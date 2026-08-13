@@ -941,6 +941,9 @@ class MainApp(QMainWindow):
                 self.tabs.setCurrentIndex(index)
         pane.text_display.setFocus()
         self._sync_menu_state()  # the file menu follows the newly active editor
+        # pin its grid to its current on-screen size (a freshly shown/activated window may not emit
+        # a resizeEvent, e.g. the very first window or an unchanged geometry on tab switch)
+        self.resize_editor_grid(pane.text_display)
 
     def activate_pane(self, pane):
         """Make the given pane the active editor by switching Neovim to its window (GUI -> Neovim).
@@ -1041,6 +1044,30 @@ class MainApp(QMainWindow):
         cols = max(MIN_COLS_ROWS, int(display.width() / font_size.width))
         rows = max(MIN_COLS_ROWS, int(self.central_widget.height() / font_size.height))
         self.nvi.future_request("nvim_ui_try_resize", cols, rows)
+
+    def resize_editor_grid(self, display):
+        """Resize one editor's Neovim window grid to match its display's on-screen size.
+
+        Called from the display's resizeEvent. Each pane drives its own grid, so a docked tab and a
+        detached window get their real sizes in Neovim independently (nvim_ui_try_resize_grid is
+        sticky and does not disturb the other grids or the global one).
+        """
+        pane = getattr(display, "pane", None)
+        # C? dejé un comentario en el __init__ de TextDisplay, eso aseguraría que siempre tiene `pane` (no hace falta el getattr)
+        if pane is None or display.font_size is None:
+            return
+        if not display.isVisible():
+            return  # a hidden tab has a stale/zero size; do not shrink its grid
+        grid = self.grids.get_grid_by_pane(pane)
+        if grid is None:
+            return  # the window is not wired to a Neovim grid yet
+        font_size = display.font_size
+        cols = max(MIN_COLS_ROWS, int(display.width() / font_size.width))
+        rows = max(MIN_COLS_ROWS, int(display.height() / font_size.height))
+        if (cols, rows) == display._last_grid_size:
+            return  # nothing changed at grid granularity; skip the redundant resize
+        display._last_grid_size = (cols, rows)
+        self.nvi.future_request("nvim_ui_try_resize_grid", grid, cols, rows)
 
     def _path_discover_cb(self, path):
         """Indicate if the given path is opened here (in any tab) and claim GUI attention if so."""

@@ -306,6 +306,8 @@ class TextDisplay(BaseDisplay):
         super().__init__(interactive=interactive)
         self.main_window = main_window
         self.initial_resizing_done = False
+        # last (cols, rows) we told Neovim this window's grid should be, to skip redundant resizes
+        self._last_grid_size = None
 
         # some defaults
         self.font_size = None
@@ -325,6 +327,20 @@ class TextDisplay(BaseDisplay):
         self.nvimhl_to_qtfmt = {}
         # cache to hold mode_info processed structures
         self.mode_info_structs = {}
+
+        # C? este no tendría que tener un "pane" en None? O mejor, que EditorPane se lo pase al crear la instancia, así siempre lo tiene y siempre con el valor correcto, qué te parece?
+
+    def resizeEvent(self, event):
+        """Ask Neovim to resize this window's grid to match the widget's new on-screen size.
+
+        Only interactive editor displays do this (the strips are display-only). Each editor pane
+        drives its OWN grid via nvim_ui_try_resize_grid, so a tab and a detached window can have
+        different sizes in Neovim; per-grid resizes are independent (they do not touch the global
+        grid), so this cannot feed back into the strip/global resize loop.
+        """
+        super().resizeEvent(event)
+        if self._interactive:
+            self.main_window.resize_editor_grid(self)
 
     def handle_keyboard(self, key_text, key, modifiers):
         """Handle keyboard events."""
