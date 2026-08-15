@@ -98,8 +98,8 @@ class TestNvimNotificationsRedraw:
 
     def test_known_submethod_is_dispatched(self, notif):
         """_h__redraw() calls the matching _n_redraw__* method."""
-        notif._h__redraw(["set_title", ["My Title"]])
-        notif.main_window.setWindowTitle.assert_called_once_with("My Title")
+        notif._h__redraw(["option_set", ["guifont", "Monospace:h14"]])
+        notif.main_window.set_editor_font.assert_called_once_with("Monospace", 14.0)
 
     def test_unknown_submethod_logs_error(self, notif, logs):
         """_h__redraw() logs an error for unknown submethods and does not raise."""
@@ -109,8 +109,8 @@ class TestNvimNotificationsRedraw:
     def test_exception_is_caught_and_execution_continues(self, notif, logs):
         """Exception in one submethod is logged; remaining submethods still run."""
         notif._editor.flush.side_effect = RuntimeError("boom")
-        notif._h__redraw(["flush", None], ["set_title", ["Title"]])
-        notif.main_window.setWindowTitle.assert_called_once_with("Title")
+        notif._h__redraw(["flush", None], ["option_set", ["guifont", "Mono:h10"]])
+        notif.main_window.set_editor_font.assert_called_once_with("Mono", 10.0)
         assert "Crash" in logs.error
 
     def test_multiple_submethods_all_dispatched(self, notif):
@@ -254,10 +254,10 @@ class TestNvimNotificationsRedrawHandlers:
         notif._n_redraw__set_icon(["myicon"])
         assert "set icon" in logs.warning
 
-    def test_set_title(self, notif):
-        """Calls main_window.setWindowTitle with the given title."""
+    def test_set_title_is_ignored(self, notif):
+        """set_title is ignored: the editor layer manages each window's title itself."""
         notif._n_redraw__set_title(["My Editor"])
-        notif.main_window.setWindowTitle.assert_called_once_with("My Editor")
+        notif.main_window.setWindowTitle.assert_not_called()
 
     def test_win_viewport(self, notif):
         """Routes adjust_viewport to the pane of the window grid, with the right arguments."""

@@ -17,7 +17,8 @@
       "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ ruff check -q)",
       "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ ruff check)",
       "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ ruff check --output-format=concise)",
-      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ env/bin/python -m pytest tests/ -q)"
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ env/bin/python -m pytest tests/ -q)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ env/bin/ruff check nysor/)"
     ]
   }
 }

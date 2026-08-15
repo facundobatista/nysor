@@ -512,9 +512,12 @@ class NvimNotifications:
             logger.warning("[NvimNotifications] need to implement set icon with {!r}", icon)
 
     def _n_redraw__set_title(self, param):
-        """Set title."""
-        (title,) = param
-        self.main_window.setWindowTitle(title)
+        """Ignore Neovim's global title (the editor layer titles each GUI window itself).
+
+        Neovim's title reflects the CURRENT window (which may be a detached one), but each GUI
+        window's title must follow its own shown tab -- see MainApp._refresh_main_title and
+        _refresh_tab_label.
+        """
 
     def _n_redraw__win_viewport(self, args):
         """Information for the GUI viewport; routed to the pane that owns the window grid."""

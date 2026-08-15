@@ -330,8 +330,8 @@ class EditorPane(QWidget):
     def __init__(self, main_window):
         super().__init__()
         self.main_window = main_window
-        self.text_display = TextDisplay(main_window)
-        self.text_display.pane = self  # back-reference so viewport events can reach the pane
+        # pass ourselves as the pane so the display always has its back-reference set correctly
+        self.text_display = TextDisplay(main_window, pane=self)
         self.closed = False  # set when the tab is removed, so in-flight async work bails out
         # identity (window/buffer/filepath) lives in the GridRegistry; the pane only keeps the
         # transient modified flag that its tab label shows
@@ -593,6 +593,18 @@ class MainApp(QMainWindow):
         entry = self._active_entry()
         return entry.filepath if entry is not None else None
 
+    def _refresh_main_title(self):
+        """Set the main window title to its CURRENT tab's filepath.
+
+        It follows the shown tab, not the globally-active editor: while you work in a detached
+        window, the main window keeps showing (and titling) its own current tab.
+        """
+        pane = self.tabs.currentWidget()
+        grid = self.grids.get_grid_by_pane(pane) if pane is not None else None
+        entry = self.grids.get_entry_by_grid(grid)
+        path = entry.filepath if entry is not None else None
+        self.setWindowTitle(path or "Nysor")
+
     def _refresh_tab_label(self, grid_id):
         """Rebuild a window grid's label (tab text or detached-window title) from its filepath."""
         entry = self.grids.get_entry_by_grid(grid_id)
@@ -609,6 +621,7 @@ class MainApp(QMainWindow):
         index = self.tabs.indexOf(entry.pane)
         if index != -1:
             self.tabs.setTabText(index, name)
+        self._refresh_main_title()  # the current tab's filepath may have changed
 
     def refresh_tab(self, grid_id):
         """Update a window grid's tab after its buffer/filepath changed, enforcing one-per-buffer.
@@ -662,10 +675,15 @@ class MainApp(QMainWindow):
         self.statusline_display.set_font(name, size)
 
     def set_editor_mode(self, mode_info):
-        """Set the cursor mode for all editor displays, and remember it for new tabs."""
+        """Set the cursor mode for the ACTIVE editor, and remember it for new tabs.
+
+        The mode (e.g. insert -> a bar cursor) belongs to Neovim's current window; applying it to
+        every display would change the cursor in the inactive/frozen editors too. New tabs pick up
+        the remembered mode on build; a window picks it up again when it becomes active.
+        """
         self._editor_mode = mode_info
-        for display in self._editor_displays():
-            display.change_mode(mode_info)
+        if self.text_display is not None:
+            self.text_display.change_mode(mode_info)
 
     def build_editor_tab(self):
         """Create (or reuse) the editor pane for a new window, returning its display.
@@ -965,6 +983,7 @@ class MainApp(QMainWindow):
 
     def _on_tab_changed(self, index):
         """When the user switches tab in the GUI, make that tab's pane the active editor."""
+        self._refresh_main_title()  # the shown tab changed -> retitle the main window
         if self._suppress_tab_activation:
             return  # a detach is shuffling tabs; the detached pane stays the active one
         pane = self.tabs.widget(index)
@@ -994,6 +1013,9 @@ class MainApp(QMainWindow):
         window.show()
         window.raise_()
         window.activateWindow()  # focusing it activates the pane (via changeEvent -> win_gotoid)
+        # pin the grid to the detached window size now (it was pinned to the smaller tab area, and
+        # detaching the ACTIVE tab keeps it active, so no set_active_editor fires to re-pin it)
+        self.resize_editor_grid(pane.text_display)
 
     def reattach_pane(self, pane):
         """Move a detached pane back into the tab strip and drop its window."""
@@ -1014,9 +1036,16 @@ class MainApp(QMainWindow):
         self._resize_global_grid()
 
     def changeEvent(self, event):
-        """Re-check the visible file on disk when the window regains focus (e.g. terminal edit)."""
+        """React to the main window regaining focus: reactivate its tab and re-check its file."""
         super().changeEvent(event)
+        if self.is_closing():
+            return  # shutting down: closing windows shifts focus around; don't react to it
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            # returning to the main window (e.g. from a detached one) makes its current tab the
+            # active editor again, so keyboard/scroll go to the right Neovim window
+            pane = self.tabs.currentWidget()
+            if pane is not None:
+                self.activate_pane(pane)
             # only check the buffer the user is actually looking at (the active tab == Neovim's
             # current buffer); a change to some other tab's file is caught when they switch to it
             # (the BufEnter autocmd). checktime lets Neovim prompt (load / ignore / ...); fire-and-
@@ -1046,19 +1075,21 @@ class MainApp(QMainWindow):
         self.nvi.future_request("nvim_ui_try_resize", cols, rows)
 
     def resize_editor_grid(self, display):
-        """Resize one editor's Neovim window grid to match its display's on-screen size.
+        """Resize the active editor's Neovim window grid to match its display's on-screen size.
 
-        Called from the display's resizeEvent. Each pane drives its own grid, so a docked tab and a
-        detached window get their real sizes in Neovim independently (nvim_ui_try_resize_grid is
-        sticky and does not disturb the other grids or the global one).
+        Called from the display's resizeEvent (and on activation). Each pane drives its own grid,
+        so a docked tab and a detached window get their real sizes in Neovim independently
+        (try_resize_grid is sticky and does not disturb the other grids nor the global one).
+
+        Only the ACTIVE display is resized: its window is the current tabpage's, the only one that
+        Neovim lets us resize (try_resize_grid on a window in a hidden tabpage errors 'Invalid
+        window handle'). The others re-pin when they become active (see set_active_editor).
         """
-        pane = getattr(display, "pane", None)
-        # C? dejé un comentario en el __init__ de TextDisplay, eso aseguraría que siempre tiene `pane` (no hace falta el getattr)
-        if pane is None or display.font_size is None:
+        if display is not self.text_display:
+            return  # only the active window's tabpage is current; Neovim rejects resizing the rest
+        if display.pane is None or display.font_size is None:
             return
-        if not display.isVisible():
-            return  # a hidden tab has a stale/zero size; do not shrink its grid
-        grid = self.grids.get_grid_by_pane(pane)
+        grid = self.grids.get_grid_by_pane(display.pane)
         if grid is None:
             return  # the window is not wired to a Neovim grid yet
         font_size = display.font_size
@@ -1179,8 +1210,63 @@ class MainApp(QMainWindow):
         except NeovimError as err:
             log_notdone("Got error when opening the file, this should never happen", err=err)
 
+    async def _save_for_quit(self, entry):
+        """Save an editor's buffer before closing it during quit; return False if the user cancels.
+
+        A named buffer is written directly; an unnamed one asks for a filename (saveas!). Awaited
+        so the write completes before the window is closed and before the final qall.
+        """
+        if entry.filepath:
+            await self.nvi.call("nvim_call_function", "win_execute", [entry.win_id, "write"])
+            return True
+        filename, _ = QFileDialog.getSaveFileName(self, "Save File", "", "")
+        if not filename:
+            return False
+        # saveas! in that window's context (vim.cmd escapes the path; the bang overwrites the file
+        # the dialog already confirmed)
+        _code = """
+            local win, fname = ...
+            vim.api.nvim_win_call(win, function()
+                vim.cmd.saveas({args = {fname}, bang = true})
+            end)
+        """
+        await self.nvi.call("nvim_exec_lua", _code, [entry.win_id, filename])
+        return True
+
     async def _quit(self):
-        """Close the GUI after Neovim is down."""
+        """Close the GUI after Neovim is down, prompting for each editor with unsaved changes.
+
+        Walk the open editors: each modified one prompts Save / Discard / Cancel and is closed as
+        it is answered (save -> write/saveas; discard -> mark the buffer unmodified so its changes
+        are dropped). Everything is AWAITED so it completes in order before the final qall (else a
+        fire-and-forget close would race qall, which would then still see the buffer modified ->
+        E37). Cancel aborts the quit: already-closed editors stay closed, the rest stay open.
+        """
+        logger.debug("Start shutdown; resolving modified editors")
+        for entry in self.grids.get_all_entries():  # snapshot: closing mutates the registry
+            if entry.win_id is None or not entry.pane.modified:
+                continue
+            choice = await self._ask_close_modified(entry.filepath)
+            if choice == "cancel":
+                self._closing = 0  # abort: already-closed editors stay closed, the rest stay open
+                return
+            if choice == "save":
+                if not await self._save_for_quit(entry):
+                    self._closing = 0  # the save-as dialog was cancelled
+                    return
+            else:
+                # discard: clear the modified flag so the buffer closes without writing (its
+                # unsaved changes are simply dropped, the file on disk is left untouched)
+                await self.nvi.call(
+                    "nvim_call_function", "win_execute", [entry.win_id, "setlocal nomodified"])
+            # close this editor's window now that its buffer is clean; the last remaining window
+            # cannot be closed this way (E444) -> leave it for the qall below
+            try:
+                await self.nvi.call("nvim_win_close", entry.win_id, False)
+            except NeovimError:
+                pass
+
+        # nothing modified is left; quit for real (this closes any remaining unmodified windows)
         logger.debug("Start shutdown, asking Neovim to quit")
         error = await self.nvi.quit()
         if error:

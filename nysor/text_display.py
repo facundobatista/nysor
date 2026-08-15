@@ -302,9 +302,12 @@ class TextDisplay(BaseDisplay):
     # cache to hold chars drawing widths; cleaned when font changes
     _char_drawing_widths_cache = {}
 
-    def __init__(self, main_window, interactive=True):
+    def __init__(self, main_window, interactive=True, pane=None):
         super().__init__(interactive=interactive)
         self.main_window = main_window
+        # the EditorPane owning this display (None for the display-only strips); passed at
+        # construction so it is always set with the right value
+        self.pane = pane
         self.initial_resizing_done = False
         # last (cols, rows) we told Neovim this window's grid should be, to skip redundant resizes
         self._last_grid_size = None
@@ -327,8 +330,6 @@ class TextDisplay(BaseDisplay):
         self.nvimhl_to_qtfmt = {}
         # cache to hold mode_info processed structures
         self.mode_info_structs = {}
-
-        # C? este no tendría que tener un "pane" en None? O mejor, que EditorPane se lo pase al crear la instancia, así siempre lo tiene y siempre con el valor correcto, qué te parece?
 
     def resizeEvent(self, event):
         """Ask Neovim to resize this window's grid to match the widget's new on-screen size.
@@ -494,6 +495,13 @@ class TextDisplay(BaseDisplay):
     def paint(self, painter):
         """Paint (draw) the grid."""
         cell_height = self.font_size.height
+
+        # fill the whole widget with the default background first, so the leftover border (the
+        # widget is rarely an exact multiple of the cell size) blends in instead of showing the
+        # bare widget colour -- visible e.g. in a detached window that is not background-coloured
+        default_colors = self.main_window.nvim_notifs.structs.get("default_colors")
+        if default_colors is not None:
+            painter.fillRect(self.rect(), QColor(default_colors["background"]))
 
         # paint all backgrounds first!
         for row in range(self.display_size[1]):
