@@ -175,9 +175,16 @@ class GridRegistry:
         """Return all window grid entries."""
         return list(self._by_grid.values())
 
+    def get_entry_by_path(self, filepath: str) -> GridEntry | None:
+        """Return the (first) window grid entry showing the given filepath, or None."""
+        for entry in self._by_grid.values():
+            if entry.filepath == filepath:
+                return entry
+        return None
+
     def has_path(self, filepath: str) -> bool:
         """Whether some window grid currently shows the given filepath."""
-        return any(entry.filepath == filepath for entry in self._by_grid.values())
+        return self.get_entry_by_path(filepath) is not None
 
 
 class NvimNotifications:

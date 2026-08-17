@@ -341,6 +341,15 @@ class TestGridRegistry:
         assert reg.has_path("/some/path")
         assert not reg.has_path("/other")
 
+    def test_get_entry_by_path(self):
+        """get_entry_by_path returns the entry showing the filepath, or None."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.add_grid(4, object())
+        reg.set_buffer(4, 9, "/some/path")
+        assert reg.get_entry_by_path("/some/path").grid_id == 4
+        assert reg.get_entry_by_path("/nope") is None
+
     def test_records_lists_all_windows(self):
         """records() returns every window grid record."""
         reg = GridRegistry()

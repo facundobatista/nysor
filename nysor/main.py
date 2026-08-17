@@ -1101,15 +1101,37 @@ class MainApp(QMainWindow):
         self.nvi.future_request("nvim_ui_try_resize_grid", grid, cols, rows)
 
     def _path_discover_cb(self, path):
-        """Indicate if the given path is opened here (in any tab) and claim GUI attention if so."""
-        is_here = self.grids.has_path(path)
-        if is_here:
-            # we have somebody else's path, claim attention!
-            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-            self.show()
-            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
-            self.show()
-        return is_here
+        """Swarm callback: if we show `path`, reveal its tab/window; report whether we have it."""
+        return self._reveal_path(path)
+
+    def _reveal_path(self, path):
+        """Bring the editor showing `path` to the front; return True if we have it, else False.
+
+        The editor may be a tab in the main window (select it and raise the main window) or a
+        detached window (raise that one).
+        """
+        entry = self.grids.get_entry_by_path(path)
+        if entry is None:
+            return False
+        window = self._detached.get(entry.pane)
+        if window is not None:
+            self._force_to_front(window)
+        else:
+            index = self.tabs.indexOf(entry.pane)
+            if index != -1:
+                # C? si ya esta en "self.gridS" y no esta detacheado, significa que tiene que estar en tabs, no? sino debería ser un error más espeso
+                self.tabs.setCurrentIndex(index)
+            self._force_to_front(self)
+        return True
+
+    def _force_to_front(self, window):
+        """Raise a window and grab focus even from another app (the WindowStaysOnTop dance)."""
+        window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        window.show()
+        window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     async def setup_nvim(self, paths_to_open):
         """Set up Neovim from the GUI PoV.
@@ -1350,10 +1372,40 @@ class MainApp(QMainWindow):
         self.nvi.future_request("nvim_command", "tabnew")
 
     def open_file_dialog(self):
-        """Ask the user for a file and open it (in a new tab; see open_file)."""
+        """Ask the user for a file and open it, deduplicating across this and other instances."""
+        call_async(self.open_file_flow)
+
+    async def open_file_flow(self):
+        """Pick a file and open it, avoiding duplicates in this and in other Nysor instances.
+
+        If we already show it, just go to its tab/window (no prompt). If another Nysor shows it,
+        tell the user and do not open a duplicate. Otherwise open it here.
+        """
         filename, _ = QFileDialog.getOpenFileName(self, "Open File", "", "")
-        if filename:
-            self.open_file(filename)
+        if not filename:
+            return
+        filename = os.path.realpath(filename)  # normalize so path matching is consistent
+        if self._reveal_path(filename):
+            return  # already open here -> just revealed its tab/window
+        # C? hasta acá toda esta función es bloqueante, si estas lineas las ponemos en open_file_dialog queda bien separado; y si el usuario no elige un archivo o ya lo tenemos abierto local, nunca venimos a esta parte async...
+        if await swarm.discover(asyncio.get_running_loop(), filename):
+            await self._show_open_elsewhere(filename)
+            return
+        self.open_file(filename)
+        # C? por qué no metemos el código de `open_file` acá mismo, y de paso queda async y nos evitamos el future_request que tiene?
+
+    async def _show_open_elsewhere(self, filepath):
+        """Tell the user the file is already open in another Nysor instance (non-blocking)."""
+        name = os.path.basename(filepath)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Icon.Information)
+        dlg.setWindowTitle("Already open")
+        dlg.setText(f"{name!r} is already open in another Nysor instance.")
+        dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        answered = asyncio.Event()
+        dlg.finished.connect(lambda _result: answered.set())
+        dlg.open()
+        await answered.wait()
 
     def open_file(self, filename):
         """Open a file in a new tab, reusing the active tab only if it is an empty unnamed buffer.
@@ -1415,7 +1467,8 @@ def start():
         else:
             raise ValueError("Cannot specify special '-' among other paths")
     else:
-        requested_paths = [os.path.realpath(path) for path in args.path]
+        # avoid duplicates in the given paths
+        requested_paths = sorted({os.path.realpath(path) for path in args.path})
 
     # setup logging and create the app itself
     logsetup(args.loglevel)
@@ -1429,18 +1482,33 @@ def start():
     app.aboutToQuit.connect(app_close_event.set)
 
     async def main():
-        """Discover if this process will handle this path and start everything in that case."""
+        """Start Nysor, opening only the requested paths not already handled elsewhere."""
         nysor_version = get_nysor_version()
         logger.info("Starting Nysor {}", nysor_version)
 
-        # FIXME.90: enable multiple paths!
-        # if path not in (SPECIAL_STDIN_PATH, None):
-        #    already_handled = await swarm.discover(event_loop, path)
-        #    if already_handled:
-        #        return
+        if requested_paths != SPECIAL_STDIN_PATH and requested_paths:
+            # ask the swarm about each path (concurrently) and
+            # keep only the ones no other Nysor is already showing
+            coros = (swarm.discover(event_loop, path) for path in requested_paths)
+            handled = await asyncio.gather(*coros)
+            paths_to_open = []
+            for path, others in zip(requested_paths, handled):
+                if others:
+                    logger.info(
+                        "Path handled in other Nysor instance (not opening here): {}",
+                        path
+                    )
+                else:
+                    paths_to_open.append(path)
+            if not paths_to_open:
+                # every requested path is already open elsewhere -> this instance does not start
+                logger.info("All requested paths handled by other Nysor instances; not starting")
+                return
+        else:
+            paths_to_open = requested_paths
 
         # start and show GUI
-        main_window = MainApp(nysor_version, event_loop, requested_paths, args.nvim)
+        main_window = MainApp(nysor_version, event_loop, paths_to_open, args.nvim)
         main_window.show()
         await app_close_event.wait()
 

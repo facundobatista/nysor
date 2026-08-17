@@ -62,13 +62,18 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 
 These are the items lousely grouped to get there:
 
+
 **For 0.7:**
+- MULTIWINDOWS!!!
+- Anything else?
+
+**For 0.8:**
 - allow double-level logging (user selected to terminal, debug to a file if configured)
 - FIXME.94 allow logging system to use `logger.trace`
+- Improve swarm discover latency
 
 
 **For 1.0:**
-
 - Think about "distribution"
     - upload it to PyPI and check `uvx` and `fades` work to run it
     - package it with `pyempaq`
@@ -83,14 +88,6 @@ The path after that is less descriptive. The following are the big items I want 
 - add a treeview in the left of the window
     - simple, showing the directory where the process is run
     - if double click in a file, it should open a new window/tab with the new buffer
-- support multiple buffers open
-    - FIXME.90
-    - switch back and forward clicking on tabs
-    - when going back to a tab, it should check if underneath file changed
-    - support closing properly, each tab or the whole program, asking for the buffers that are not properly saved
-    - restore "remote check"
-    - the name in the tab should show if the file is "modified"
-    - check private/public naming after all this journey
 - split command bar / messages
     - try to separate, if possible, the command bar from Neovim's grid itself
         - add better history and ways to search/filter previous commands
@@ -102,8 +99,6 @@ The path after that is less descriptive. The following are the big items I want 
     https://neovim.io/doc/user/api-ui-events/#ui-messages
 
 **For version 3:**
-- it should open more than a file if it's given in the command line
-    - each file should be a separate window in the "right pane zone"
 - double clicking in the tree view should also edit the file
 - when open from a terminal, the layout should change according to the indicated parameters
     - if it's one or more files, open them as (multiple) windows, without a treeview
