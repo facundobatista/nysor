@@ -388,8 +388,13 @@ class EditorPane(QWidget):
             self.h_scroll.setMaximum(0)
             return
 
-        # get the lengths of lines that are currently shown
-        buf = 0  # FIXME.90: why 0? first buffer per window? revisit when multiple windows
+        # get the lengths of the lines currently shown, for THIS pane's own buffer -- getbufline(0)
+        # is the *alternate* buffer, not ours, so with more than one buffer it read the wrong one
+        grid = self.main_window.grids.get_grid_by_pane(self)
+        entry = self.main_window.grids.get_entry_by_grid(grid)
+        buf = entry.bufnr if entry is not None else None
+        if buf is None:
+            return  # we don't know this window's buffer yet; leave the horizontal scroll bar as is
         start = topline + 1  # getbufline's first line is 1
         end = botline - 1  # botline is the "next line, out of the view"
         cmd = f"map(getbufline({buf}, {start}, {end}), {{key, val -> strlen(val)}})"

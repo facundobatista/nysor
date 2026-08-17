@@ -331,14 +331,14 @@ class NvimNotifications:
 
     # -- specific notification handlers
 
-    def _n_redraw__default_colors_set(self, colors):
-        """Set the default colors."""
-        rgb_fg, rgb_bg, rgb_sp, _, _ = colors  # last two are ignored because are for terminals
-        self.structs.setdefault("default_colors", {}).update({
-            "foreground": rgb_fg,
-            "background": rgb_bg,
-            "special": rgb_sp,
-        })
+    def _n_redraw__default_colors_set(self, *args):
+        """Set the default colors (one redraw may carry several; the last wins)."""
+        for rgb_fg, rgb_bg, rgb_sp, _term_fg, _term_bg in args:  # last two are for terminals
+            self.structs.setdefault("default_colors", {}).update({
+                "foreground": rgb_fg,
+                "background": rgb_bg,
+                "special": rgb_sp,
+            })
         self.dyncache.clean("default_colors")
 
     def _n_redraw__flush(self, _):
@@ -350,19 +350,19 @@ class NvimNotifications:
         if self.statusline_display is not None:
             self.statusline_display.flush()
 
-    def _n_redraw__grid_clear(self, args):
-        """Clear the grid."""
-        (grid_id,) = args
-        display = self._display_for(grid_id)
-        if display is not None:
-            display.clear()
+    def _n_redraw__grid_clear(self, *args):
+        """Clear the grid (one redraw may carry several)."""
+        for (grid_id,) in args:
+            display = self._display_for(grid_id)
+            if display is not None:
+                display.clear()
 
-    def _n_redraw__grid_cursor_goto(self, args):
-        """Move the cursor in the grid."""
-        grid_id, row, col = args
-        display = self._display_for(grid_id)
-        if display is not None:
-            display.set_cursor(row, col)
+    def _n_redraw__grid_cursor_goto(self, *args):
+        """Move the cursor in the grid (one redraw may carry several)."""
+        for grid_id, row, col in args:
+            display = self._display_for(grid_id)
+            if display is not None:
+                display.set_cursor(row, col)
 
     def _n_redraw__grid_line(self, *args):
         """Expose a line in the grid."""
@@ -373,27 +373,27 @@ class NvimNotifications:
                 # note we ignore "wrap", couldn't find proper utility for it
                 display.write_grid(row, col_start, cells)
 
-    def _n_redraw__grid_resize(self, args):
-        """Resize a grid: render each grid's display at exactly the size Neovim reports."""
-        grid_id, width, height = args
-        self._grid_sizes[grid_id] = (width, height)
-        kind = self.grids.get_kind_by_grid(grid_id)
-        if kind == GridRegistry.GRID_WINDOW:
-            # a not-yet-created window keeps its size in _grid_sizes; _ensure_editor applies it
-            entry = self.grids.get_entry_by_grid(grid_id)
-            if entry is not None:
-                entry.pane.text_display.resize_view((width, height))
-        elif kind == GridRegistry.GRID_MESSAGE:
-            self._layout_message_strip()
-        elif kind == GridRegistry.GRID_GLOBAL:
-            self._layout_statusline_strip()
+    def _n_redraw__grid_resize(self, *args):
+        """Resize grids at exactly the size Neovim reports (one redraw may carry several)."""
+        for grid_id, width, height in args:
+            self._grid_sizes[grid_id] = (width, height)
+            kind = self.grids.get_kind_by_grid(grid_id)
+            if kind == GridRegistry.GRID_WINDOW:
+                # a not-yet-created window keeps its size in _grid_sizes; _ensure_editor applies it
+                entry = self.grids.get_entry_by_grid(grid_id)
+                if entry is not None:
+                    entry.pane.text_display.resize_view((width, height))
+            elif kind == GridRegistry.GRID_MESSAGE:
+                self._layout_message_strip()
+            elif kind == GridRegistry.GRID_GLOBAL:
+                self._layout_statusline_strip()
 
-    def _n_redraw__grid_scroll(self, args):
-        """Scroll a grid."""
-        grid_id, top, bottom, left, right, rows, cols = args
-        display = self._display_for(grid_id)
-        if display is not None:
-            display.scroll((top, bottom, rows), (left, right, cols))
+    def _n_redraw__grid_scroll(self, *args):
+        """Scroll a grid (one redraw may carry several scroll ops)."""
+        for grid_id, top, bottom, left, right, rows, cols in args:
+            display = self._display_for(grid_id)
+            if display is not None:
+                display.scroll((top, bottom, rows), (left, right, cols))
 
     def _n_redraw__chdir(self, *args):
         """Neovim changed its working directory. Nothing to render; ignored for now."""
@@ -477,32 +477,32 @@ class NvimNotifications:
             hl_groups[group_name] = hl_id
         self.dyncache.clean("hl-groups")
 
-    def _n_redraw__mode_change(self, args):
-        """Information about cursor mode; the editor layer owns and applies it."""
-        mode, mode_idx = args
-        # we ignore the mode idx as we stored in the modes in a dict using the name
-        mode_info = self.structs["mode-info"][mode]
-        self.main_window.set_editor_mode(mode_info)
+    def _n_redraw__mode_change(self, *args):
+        """Cursor mode change; the editor layer owns and applies it (may carry several)."""
+        for mode, _mode_idx in args:
+            # we ignore the mode idx as we stored the modes in a dict using the name
+            mode_info = self.structs["mode-info"][mode]
+            self.main_window.set_editor_mode(mode_info)
 
-    def _n_redraw__mode_info_set(self, args):
-        """Information about cursor mode."""
-        cursor_style_enabled, mode_info = args
-        assert cursor_style_enabled  # may it come in False? what do we do? delete previous modes?
+    def _n_redraw__mode_info_set(self, *args):
+        """Cursor mode definitions (may carry several)."""
+        for cursor_style_enabled, mode_info in args:
+            assert cursor_style_enabled  # may it come False? delete previous modes? (unclear)
 
-        info = {}
-        for mi in mode_info:
-            # store by name (and remove it from the real data, together with short name)
-            name = mi.pop("name")
-            del mi["short_name"]
-            info[name] = mi
+            info = {}
+            for mi in mode_info:
+                # store by name (and remove it from the real data, together with short name)
+                name = mi.pop("name")
+                del mi["short_name"]
+                info[name] = mi
 
-        self.structs.setdefault("mode-info", {}).update(info)
-        self.dyncache.clean("mode-info")
+            self.structs.setdefault("mode-info", {}).update(info)
+            self.dyncache.clean("mode-info")
 
-    def _n_redraw__mouse_on(self, args):
+    def _n_redraw__mouse_on(self, *args):
         """Properly ignored."""
 
-    def _n_redraw__mouse_off(self, args):
+    def _n_redraw__mouse_off(self, *args):
         """Properly ignored."""
 
     def _n_redraw__option_set(self, *options):
@@ -517,13 +517,13 @@ class NvimNotifications:
             size = float(size[1:])
             self.main_window.set_editor_font(name, size)
 
-    def _n_redraw__set_icon(self, param):
-        """Set the icon, if any."""
-        (icon,) = param
-        if icon:
-            logger.warning("[NvimNotifications] need to implement set icon with {!r}", icon)
+    def _n_redraw__set_icon(self, *args):
+        """Set the icon, if any (one redraw may carry several)."""
+        for (icon,) in args:
+            if icon:
+                logger.warning("[NvimNotifications] need to implement set icon with {!r}", icon)
 
-    def _n_redraw__set_title(self, param):
+    def _n_redraw__set_title(self, *args):
         """Ignore Neovim's global title (the editor layer titles each GUI window itself).
 
         Neovim's title reflects the CURRENT window (which may be a detached one), but each GUI
@@ -531,10 +531,10 @@ class NvimNotifications:
         _refresh_tab_label.
         """
 
-    def _n_redraw__win_viewport(self, args):
-        """Information for the GUI viewport; routed to the pane that owns the window grid."""
-        grid, _win, topline, botline, curline, curcol, line_count, scroll_delta = args
+    def _n_redraw__win_viewport(self, *args):
+        """Viewport info per window; routed to the owning pane (may carry several windows)."""
         # Note: can't find use to scroll_delta (maybe for smooth scrollbar?)
-        pane = self.grids.get_pane_by_grid(grid)
-        if pane is not None:
-            call_async(pane.adjust_viewport, topline, botline, line_count, curcol)
+        for grid, _win, topline, botline, _curline, curcol, line_count, _scroll_delta in args:
+            pane = self.grids.get_pane_by_grid(grid)
+            if pane is not None:
+                call_async(pane.adjust_viewport, topline, botline, line_count, curcol)

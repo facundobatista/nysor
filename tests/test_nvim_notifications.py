@@ -196,6 +196,11 @@ class TestNvimNotificationsRedrawHandlers:
         notif._n_redraw__grid_scroll([2, 0, 24, 0, 80, 3, 0])
         notif._editor.scroll.assert_called_once_with((0, 24, 3), (0, 80, 0))
 
+    def test_grid_scroll_multiple(self, notif):
+        """Several scroll ops batched in one redraw are all applied."""
+        notif._n_redraw__grid_scroll([2, 0, 20, 0, 80, 1, 0], [2, 16, 20, 0, 80, -1, 0])
+        assert notif._editor.scroll.call_count == 2
+
     def test_hl_attr_define(self, notif, mocker):
         """Stores highlight attributes in structs and cleans the cache."""
         mock_clean = mocker.patch.object(notif.dyncache, "clean")
