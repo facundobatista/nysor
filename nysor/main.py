@@ -250,7 +250,7 @@ class MainMenu:
 
     @_log_action
     def _on__file__open(self):
-        """Open a file (in a new tab; see MainApp.open_file)."""
+        """Open a file (deduplicated across instances; see MainApp.open_file_dialog)."""
         self._main_window.open_file_dialog()
 
     @_log_action
@@ -491,6 +491,10 @@ class MainApp(QMainWindow):
         self._detached = {}
         # set while detaching so removing the tab does not bounce activation to a sibling tab
         self._suppress_tab_activation = False
+        # the grid Neovim currently has as its active window (the only one we may resize); tracked
+        # from win_pos, updated BEFORE building its tab so a relayout mid-build cannot resize the
+        # previously-active (now hidden) window
+        self._active_grid = None
         self.nvim_notifs = NvimNotifications(self)
         self.grids = self.nvim_notifs.grids  # the central registry (single source of truth)
 
@@ -933,6 +937,15 @@ class MainApp(QMainWindow):
         """
         self.nvi.future_request("nvim_exec_lua", _code, [entry.win_id, filename])
 
+    def mark_active_grid(self, grid_id):
+        """Record which grid Neovim just made current (called from win_pos, before its tab exists).
+
+        This is set early -- before build_editor_tab, whose font setup relayouts the window and can
+        fire a resizeEvent on the previously-active tab -- so resize_editor_grid never tries to
+        resize a window that Neovim already moved off (which would error 'Invalid window handle').
+        """
+        self._active_grid = grid_id
+
     def set_active_editor(self, grid_id):
         """Bring the given window grid's pane to the front and focus it (Neovim -> GUI).
 
@@ -1081,17 +1094,18 @@ class MainApp(QMainWindow):
         so a docked tab and a detached window get their real sizes in Neovim independently
         (try_resize_grid is sticky and does not disturb the other grids nor the global one).
 
-        Only the ACTIVE display is resized: its window is the current tabpage's, the only one that
-        Neovim lets us resize (try_resize_grid on a window in a hidden tabpage errors 'Invalid
-        window handle'). The others re-pin when they become active (see set_active_editor).
+        Only the window Neovim currently has active is resized: it is the one in the current
+        tabpage, the only one Neovim lets us resize (try_resize_grid on a window in a hidden
+        tabpage errors 'Invalid window handle'). We compare against `_active_grid` (tracked from
+        win_pos), NOT text_display, because during a switch text_display lags Neovim briefly and a
+        relayout in that gap would otherwise resize the just-hidden window. Others re-pin when they
+        become active (see set_active_editor).
         """
-        if display is not self.text_display:
-            return  # only the active window's tabpage is current; Neovim rejects resizing the rest
         if display.pane is None or display.font_size is None:
             return
         grid = self.grids.get_grid_by_pane(display.pane)
-        if grid is None:
-            return  # the window is not wired to a Neovim grid yet
+        if grid is None or grid != self._active_grid:
+            return  # not the current tabpage's window -> would be rejected; re-pins on activation
         font_size = display.font_size
         cols = max(MIN_COLS_ROWS, int(display.width() / font_size.width))
         rows = max(MIN_COLS_ROWS, int(display.height() / font_size.height))
@@ -1117,10 +1131,11 @@ class MainApp(QMainWindow):
         if window is not None:
             self._force_to_front(window)
         else:
+            # in the registry and not detached -> it must be a tab; a missing index is a broken
+            # invariant, not something to skip silently
             index = self.tabs.indexOf(entry.pane)
-            if index != -1:
-                # C? si ya esta en "self.gridS" y no esta detacheado, significa que tiene que estar en tabs, no? sino debería ser un error más espeso
-                self.tabs.setCurrentIndex(index)
+            assert index != -1, "a registered, non-detached pane must be a tab"
+            self.tabs.setCurrentIndex(index)
             self._force_to_front(self)
         return True
 
@@ -1372,27 +1387,33 @@ class MainApp(QMainWindow):
         self.nvi.future_request("nvim_command", "tabnew")
 
     def open_file_dialog(self):
-        """Ask the user for a file and open it, deduplicating across this and other instances."""
-        call_async(self.open_file_flow)
+        """Pick a file and open it, deduplicating locally first, then across instances.
 
-    async def open_file_flow(self):
-        """Pick a file and open it, avoiding duplicates in this and in other Nysor instances.
-
-        If we already show it, just go to its tab/window (no prompt). If another Nysor shows it,
-        tell the user and do not open a duplicate. Otherwise open it here.
+        The pick and the local check are synchronous (if the user cancels or we already show the
+        file, we never touch the async path); we only go async to ask the swarm when we actually
+        need to -- i.e. the file is not open here.
         """
         filename, _ = QFileDialog.getOpenFileName(self, "Open File", "", "")
         if not filename:
             return
         filename = os.path.realpath(filename)  # normalize so path matching is consistent
         if self._reveal_path(filename):
-            return  # already open here -> just revealed its tab/window
-        # C? hasta acá toda esta función es bloqueante, si estas lineas las ponemos en open_file_dialog queda bien separado; y si el usuario no elige un archivo o ya lo tenemos abierto local, nunca venimos a esta parte async...
+            return  # already open here -> just revealed its tab/window; no swarm round-trip
+        call_async(self._open_if_free_in_swarm, filename)
+
+    async def _open_if_free_in_swarm(self, filename):
+        """Open `filename` here unless another Nysor already has it (then just tell the user).
+
+        Opens in a new tab, reusing the active tab only if it is an empty unnamed buffer. nvim_cmd
+        with structured args lets Neovim escape the path (spaces, etc.) for us.
+        """
         if await swarm.discover(asyncio.get_running_loop(), filename):
             await self._show_open_elsewhere(filename)
             return
-        self.open_file(filename)
-        # C? por qué no metemos el código de `open_file` acá mismo, y de paso queda async y nos evitamos el future_request que tiene?
+        entry = self._active_entry()
+        reuse = entry is not None and not entry.filepath and not entry.pane.modified
+        cmd = "edit" if reuse else "tabedit"
+        await self.nvi.call("nvim_cmd", {"cmd": cmd, "args": [filename]}, {"output": False})
 
     async def _show_open_elsewhere(self, filepath):
         """Tell the user the file is already open in another Nysor instance (non-blocking)."""
@@ -1406,16 +1427,6 @@ class MainApp(QMainWindow):
         dlg.finished.connect(lambda _result: answered.set())
         dlg.open()
         await answered.wait()
-
-    def open_file(self, filename):
-        """Open a file in a new tab, reusing the active tab only if it is an empty unnamed buffer.
-
-        Using nvim_cmd with structured args lets Neovim escape the path (spaces, etc.) for us.
-        """
-        entry = self._active_entry()
-        reuse = entry is not None and not entry.filepath and not entry.pane.modified
-        cmd = "edit" if reuse else "tabedit"
-        self.nvi.future_request("nvim_cmd", {"cmd": cmd, "args": [filename]}, {"output": False})
 
     def buffer_save(self):
         """Save the current buffer."""

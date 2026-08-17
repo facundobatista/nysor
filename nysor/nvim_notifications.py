@@ -229,6 +229,10 @@ class NvimNotifications:
         The editor layer (main_window) owns font/cursor-mode and applies them to the freshly
         built display; here we only apply what is genuinely notification data: the grid size.
         """
+        # under multigrid only the current tabpage's window renders, so a grid we are asked to
+        # render/build IS the active one; mark it BEFORE build_editor_tab, whose font setup
+        # relayouts the window and would otherwise resize the previously-active (now hidden) tab
+        self.main_window.mark_active_grid(grid_id)
         entry = self.grids.get_entry_by_grid(grid_id)
         if entry is None:
             display = self.main_window.build_editor_tab()
@@ -413,7 +417,8 @@ class NvimNotifications:
             assert win_type == "Window"
 
             # ensure the window has its editor tab, record its Neovim window id, and make it the
-            # active one (this is how opening a file in a new tabpage switches the GUI to it)
+            # active one (this is how opening a file in a new tabpage switches the GUI to it);
+            # _ensure_editor marks this grid active (before its build relayouts the window)
             self._ensure_editor(grid_id)
             self.grids.set_win(grid_id, win_id)
             self.main_window.set_active_editor(grid_id)
