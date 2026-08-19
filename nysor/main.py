@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtCore import Qt, QEvent, QTimer
 from PyQt6.QtGui import QIcon, QAction
 
 
@@ -197,36 +197,39 @@ class CreateIssueDialog(QDialog):
 class MainMenu:
     """Build a menu bar on a window, filtered by scope.
 
-    A single definition serves every window: each entry is tagged 'global' (app-level, only the
-    main window) or 'window' (acts on the focused editor, so every window gets it). The main shows
-    all of them; a detached editor window shows only the 'window'-scoped ones (its menu is thus
-    almost the same File menu, minus New/Open/Exit and the empty Debug/Help). The handlers act on
-    the ACTIVE editor, which is the window whose menu you clicked (clicking it activates it).
+    A single definition serves every window: each entry is tagged with the windows that show it --
+    'main' (app-level actions and dev tools, only the main window) or 'all' (editor actions plus
+    the universal Help, shown on every window). The main window shows everything; a detached editor
+    window shows only the 'all' entries (so it gets Save/Save As/Close and Help, but not
+    New/Open/Exit nor Debug). The handlers act on the ACTIVE editor, which is the window whose menu
+    you clicked (clicking a menu activates its window).
     """
 
-    SCOPE_GLOBAL = "global"
-    SCOPE_WINDOW = "window"
+    SCOPE_MAIN = "main"  # only the main window
+    SCOPE_ALL = "all"    # every window, main and detached
 
     # (label, handler-suffix, scope); (None, None, None) is a separator
     MENU = {
         "&File": [
-            ("&New", "file__new", SCOPE_GLOBAL),
-            ("&Open", "file__open", SCOPE_GLOBAL),
-            ("&Save", "file__save", SCOPE_WINDOW),
-            ("&Save as...", "file__save_as", SCOPE_WINDOW),
+            ("&New", "file__new", SCOPE_MAIN),
+            ("&Open", "file__open", SCOPE_MAIN),
+            ("&Close", "file__close_tab", SCOPE_ALL),
             (None, None, None),
-            ("&Close", "file__close_tab", SCOPE_WINDOW),
-            ("E&xit", "file__exit", SCOPE_GLOBAL),
+            ("&Save", "file__save", SCOPE_ALL),
+            ("S&ave as...", "file__save_as", SCOPE_ALL),
+            ("&Reload", "file__reload", SCOPE_ALL),
+            (None, None, None),
+            ("E&xit", "file__exit", SCOPE_MAIN),
         ],
         "&Debug": [
-            ("Run a blocking call", "debug__blocking_call", SCOPE_GLOBAL),
-            ("Run an async task", "debug__async_task", SCOPE_GLOBAL),
+            ("Run a blocking call", "debug__blocking_call", SCOPE_MAIN),
+            ("Run an async task", "debug__async_task", SCOPE_MAIN),
         ],
         "&Help": [
-            ("Open &project page", "help__open_project_page", SCOPE_GLOBAL),
-            ("Create a new &issue", "help__create_issue", SCOPE_GLOBAL),
+            ("Open &project page", "help__open_project_page", SCOPE_ALL),
+            ("Create a new &issue", "help__create_issue", SCOPE_ALL),
             (None, None, None),
-            ("&About Nysor", "help__about", SCOPE_GLOBAL),
+            ("&About Nysor", "help__about", SCOPE_ALL),
         ],
     }
 
@@ -239,7 +242,18 @@ class MainMenu:
                     if scope is None or scope in scopes]
             if not any(name for (label, name) in kept):
                 continue  # every real entry was filtered out -> do not add an empty menu
-            self._fill_menu(menu_bar.addMenu(title), menu_bar, kept)
+            menu = menu_bar.addMenu(title)
+            # Qt leaves keyboard focus on the menu bar after a menu closes (e.g. via Esc); hand it
+            # back to the editor so typing reaches Neovim again
+            menu.aboutToHide.connect(self._restore_editor_focus)
+            self._fill_menu(menu, menu_bar, kept)
+
+    def _restore_editor_focus(self):
+        """Return focus to the active editor once the closing menu is gone.
+
+        Deferred with a zero timer so it runs after Qt's own focus handling settles.
+        """
+        QTimer.singleShot(0, self._main_window.focus_active_editor)
 
     def _fill_menu(self, menu, menu_bar, entries):
         """Add entries to a menu, dropping leading/trailing/double separators left by filtering."""
@@ -289,6 +303,11 @@ class MainMenu:
     def _on__file__save_as(self):
         """Save the active buffer to a new file."""
         self._main_window.save_active_as()
+
+    @_log_action
+    def _on__file__reload(self):
+        """Revert the active buffer to the saved file, dropping unsaved changes (asks first)."""
+        call_async(self._main_window.reload)
 
     @_log_action
     def _on__file__close_tab(self):
@@ -484,14 +503,18 @@ class DetachedWindow(QMainWindow):
         super().__init__()
         self._app = app
         self._pane = pane
-        # a window-scoped menu (Save / Save As / Close), acting on this editor once focused
-        self._menu = MainMenu(app, self, {MainMenu.SCOPE_WINDOW})
+        # every-window menu (Save / Save As / Close + Help), acting on this editor once focused
+        self._menu = MainMenu(app, self, {MainMenu.SCOPE_ALL})
         self.setCentralWidget(pane)
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
+        self.refresh_menu_state()  # set Save/Reload to match the pane before it is first focused
 
     def refresh_menu_state(self):
-        """Enable this window's Save only when its own editor has unsaved changes."""
-        self._menu.actions["file__save"].setEnabled(self._pane.modified)
+        """Enable this window's Save/Reload per its own editor's state (never the global one)."""
+        modified = self._pane.modified
+        has_path = self._app.pane_has_path(self._pane)
+        self._menu.actions["file__save"].setEnabled(modified)
+        self._menu.actions["file__reload"].setEnabled(modified and has_path)
 
     def changeEvent(self, event):
         """When this window gains focus, make its pane the active editor."""
@@ -514,7 +537,7 @@ class MainApp(QMainWindow):
     def __init__(self, version, loop, paths_to_open, nvim_exec_path):
         super().__init__()
         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
-        self._menu = MainMenu(self, self, {MainMenu.SCOPE_GLOBAL, MainMenu.SCOPE_WINDOW})
+        self._menu = MainMenu(self, self, {MainMenu.SCOPE_MAIN, MainMenu.SCOPE_ALL})
         self.nysor_version = version
 
         self._closing = 0
@@ -620,21 +643,41 @@ class MainApp(QMainWindow):
 
     def _sync_menu_state(self):
         """Enable/disable file menu entries according to each window's editor modified state."""
-        is_modified = self.text_display.pane.modified if self.text_display is not None else False
+        pane = self.text_display.pane if self.text_display is not None else None
+        is_modified = pane is not None and pane.modified
+        # C? hay algun caso donde ejecutemos esta función y el text_display.pane sea None??
         self.state_buffer_is_modified = is_modified  # keeps the (still global) menu logic working
         self._menu.actions["file__save"].setEnabled(is_modified)
+        # Reload reverts to the saved file, so it only makes sense for a modified, named buffer
+        self._menu.actions["file__reload"].setEnabled(is_modified and self.pane_has_path(pane))
         self._menu.actions["file__open"].setEnabled(not is_modified)
-        # each detached window's Save follows its own pane (frozen while unfocused, so this is a
-        # no-op for the inactive ones), never the globally-active editor
+        # each detached window's Save/Reload follow its own pane (frozen while unfocused, so this
+        # is a no-op for the inactive ones), never the globally-active editor
         for window in self._detached.values():
             window.refresh_menu_state()
+
+    def focus_active_editor(self):
+        """Give keyboard focus back to the active editor (e.g. after a menu closes)."""
+        if self.text_display is not None:
+            self.text_display.setFocus()
+
+    def pane_has_path(self, pane):
+        """Whether the editor pane's buffer is backed by a file on disk."""
+        entry = self._entry_for_pane(pane)
+        return entry is not None and bool(entry.filepath)
+
+    def _entry_for_pane(self, pane):
+        """Return the GridEntry backing a given editor pane, or None."""
+        if pane is None:
+            return None
+        grid = self.grids.get_grid_by_pane(pane)
+        return self.grids.get_entry_by_grid(grid)
 
     def _active_entry(self):
         """Return the GridEntry backing the active tab, or None."""
         if self.text_display is None:
             return None
-        grid = self.grids.get_grid_by_pane(self.text_display.pane)
-        return self.grids.get_entry_by_grid(grid)
+        return self._entry_for_pane(self.text_display.pane)
 
     def active_filepath(self):
         """Return the filepath shown in the active tab, or None."""
@@ -914,6 +957,37 @@ class MainApp(QMainWindow):
         if clicked is discard_btn:
             return "discard"
         return "cancel"
+
+    async def reload(self):
+        """Revert the active buffer to the file on disk, dropping unsaved changes (asks first)."""
+        entry = self._active_entry()
+        if entry is None or entry.win_id is None or not entry.filepath or not entry.pane.modified:
+            # C? no me gusta este "stay safe", implica que tuvimos un error en otro lado pero lo estamos ocultando acá; prefiero fallar y no tener tanto código que revisa todo mil veces... si fallamos lo arreglamos y listo
+            return  # nothing to revert (the menu item should already be disabled, but stay safe)
+        if not await self._ask_reload(entry.filepath):
+            return
+        # ':edit!' reloads the file, dropping the unsaved changes; run it in the pane's own window
+        # so it targets the right buffer even if focus has moved on
+        self.nvi.future_request("nvim_call_function", "win_execute", [entry.win_id, "edit!"])
+
+    async def _ask_reload(self, filepath):
+        """Ask the user to confirm discarding unsaved changes; return True to proceed."""
+        name = os.path.basename(filepath)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Icon.Warning)
+        dlg.setWindowTitle("Reload")
+        dlg.setText(f"{name!r} has unsaved changes.")
+        dlg.setInformativeText("Discard them and revert to the saved file?")
+        discard_btn = dlg.addButton(QMessageBox.StandardButton.Discard)
+        cancel_btn = dlg.addButton(QMessageBox.StandardButton.Cancel)
+        dlg.setDefaultButton(cancel_btn)  # default to the safe choice for a destructive action
+
+        answered = asyncio.Event()
+        dlg.finished.connect(lambda _result: answered.set())
+        dlg.open()  # non-blocking, so the async loop keeps running while the user decides
+        await answered.wait()
+
+        return dlg.clickedButton() is discard_btn
 
     def _show_new_open_menu(self, pos):
         """Show a New/Open context menu when the empty part of the tab-bar row is right-clicked.
