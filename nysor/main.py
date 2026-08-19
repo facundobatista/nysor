@@ -195,46 +195,69 @@ class CreateIssueDialog(QDialog):
 
 
 class MainMenu:
-    """Build and manage the main menu bar for the application."""
+    """Build a menu bar on a window, filtered by scope.
 
-    def __init__(self, main_window):
+    A single definition serves every window: each entry is tagged 'global' (app-level, only the
+    main window) or 'window' (acts on the focused editor, so every window gets it). The main shows
+    all of them; a detached editor window shows only the 'window'-scoped ones (its menu is thus
+    almost the same File menu, minus New/Open/Exit and the empty Debug/Help). The handlers act on
+    the ACTIVE editor, which is the window whose menu you clicked (clicking it activates it).
+    """
+
+    SCOPE_GLOBAL = "global"
+    SCOPE_WINDOW = "window"
+
+    # (label, handler-suffix, scope); (None, None, None) is a separator
+    MENU = {
+        "&File": [
+            ("&New", "file__new", SCOPE_GLOBAL),
+            ("&Open", "file__open", SCOPE_GLOBAL),
+            ("&Save", "file__save", SCOPE_WINDOW),
+            ("&Save as...", "file__save_as", SCOPE_WINDOW),
+            (None, None, None),
+            ("&Close", "file__close_tab", SCOPE_WINDOW),
+            ("E&xit", "file__exit", SCOPE_GLOBAL),
+        ],
+        "&Debug": [
+            ("Run a blocking call", "debug__blocking_call", SCOPE_GLOBAL),
+            ("Run an async task", "debug__async_task", SCOPE_GLOBAL),
+        ],
+        "&Help": [
+            ("Open &project page", "help__open_project_page", SCOPE_GLOBAL),
+            ("Create a new &issue", "help__create_issue", SCOPE_GLOBAL),
+            (None, None, None),
+            ("&About Nysor", "help__about", SCOPE_GLOBAL),
+        ],
+    }
+
+    def __init__(self, main_window, host, scopes):
         self._main_window = main_window
-        self._menu_bar = main_window.menuBar()
         self.actions = {}
+        menu_bar = host.menuBar()
+        for title, options in self.MENU.items():
+            kept = [(label, name) for (label, name, scope) in options
+                    if scope is None or scope in scopes]
+            if not any(name for (label, name) in kept):
+                continue  # every real entry was filtered out -> do not add an empty menu
+            self._fill_menu(menu_bar.addMenu(title), menu_bar, kept)
 
-        menu_structure = {
-            "&File": [
-                ("&New", "file__new"),
-                ("&Open", "file__open"),
-                ("&Save", "file__save"),
-                ("&Save as...", "file__save_as"),
-                (None, None),
-                ("&Close Tab", "file__close_tab"),
-                ("E&xit", "file__exit"),
-            ],
-            "&Debug": [
-                ("Run a blocking call", "debug__blocking_call"),
-                ("Run an async task", "debug__async_task"),
-            ],
-            "&Help": [
-                ("Open &project page", "help__open_project_page"),
-                ("Create a new &issue", "help__create_issue"),
-                (None, None),
-                ("&About Nysor", "help__about"),
-            ],
-        }
-
-        for title, options in menu_structure.items():
-            menu = self._menu_bar.addMenu(title)
-            for visible_name, name in options:
-                if visible_name is None:
-                    menu.addSeparator()
-                    continue
-
-                action = QAction(visible_name, self._menu_bar)
-                action.triggered.connect(getattr(self, f"_on__{name}"))
-                self.actions[name] = action
-                menu.addAction(action)
+    def _fill_menu(self, menu, menu_bar, entries):
+        """Add entries to a menu, dropping leading/trailing/double separators left by filtering."""
+        have_action = False  # a real action seen since the last separator
+        pending_sep = False
+        for label, name in entries:
+            if name is None:
+                if have_action:
+                    pending_sep, have_action = True, False
+                continue
+            if pending_sep:
+                menu.addSeparator()
+                pending_sep = False
+            action = QAction(label, menu_bar)
+            action.triggered.connect(getattr(self, f"_on__{name}"))
+            self.actions[name] = action
+            menu.addAction(action)
+            have_action = True
 
     def _log_action(func):
         """Log the action indicate by the user."""
@@ -461,8 +484,14 @@ class DetachedWindow(QMainWindow):
         super().__init__()
         self._app = app
         self._pane = pane
+        # a window-scoped menu (Save / Save As / Close), acting on this editor once focused
+        self._menu = MainMenu(app, self, {MainMenu.SCOPE_WINDOW})
         self.setCentralWidget(pane)
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
+
+    def refresh_menu_state(self):
+        """Enable this window's Save only when its own editor has unsaved changes."""
+        self._menu.actions["file__save"].setEnabled(self._pane.modified)
 
     def changeEvent(self, event):
         """When this window gains focus, make its pane the active editor."""
@@ -485,7 +514,7 @@ class MainApp(QMainWindow):
     def __init__(self, version, loop, paths_to_open, nvim_exec_path):
         super().__init__()
         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
-        self._menu = MainMenu(self)
+        self._menu = MainMenu(self, self, {MainMenu.SCOPE_GLOBAL, MainMenu.SCOPE_WINDOW})
         self.nysor_version = version
 
         self._closing = 0
@@ -590,11 +619,15 @@ class MainApp(QMainWindow):
         self.text_display.setFocus()
 
     def _sync_menu_state(self):
-        """Enable/disable the file menu entries according to the active tab's modified state."""
+        """Enable/disable file menu entries according to each window's editor modified state."""
         is_modified = self.text_display.pane.modified if self.text_display is not None else False
         self.state_buffer_is_modified = is_modified  # keeps the (still global) menu logic working
         self._menu.actions["file__save"].setEnabled(is_modified)
         self._menu.actions["file__open"].setEnabled(not is_modified)
+        # each detached window's Save follows its own pane (frozen while unfocused, so this is a
+        # no-op for the inactive ones), never the globally-active editor
+        for window in self._detached.values():
+            window.refresh_menu_state()
 
     def _active_entry(self):
         """Return the GridEntry backing the active tab, or None."""
