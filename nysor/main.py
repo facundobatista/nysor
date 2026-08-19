@@ -213,12 +213,12 @@ class MainMenu:
         "&File": [
             ("&New", "file__new", SCOPE_MAIN),
             ("&Open", "file__open", SCOPE_MAIN),
-            ("&Close", "file__close_tab", SCOPE_ALL),
             (None, None, None),
             ("&Save", "file__save", SCOPE_ALL),
             ("S&ave as...", "file__save_as", SCOPE_ALL),
-            ("&Reload", "file__reload", SCOPE_ALL),
             (None, None, None),
+            ("&Reload", "file__reload", SCOPE_ALL),
+            ("&Close", "file__close_tab", SCOPE_ALL),
             ("E&xit", "file__exit", SCOPE_MAIN),
         ],
         "&Debug": [
@@ -643,9 +643,8 @@ class MainApp(QMainWindow):
 
     def _sync_menu_state(self):
         """Enable/disable file menu entries according to each window's editor modified state."""
-        pane = self.text_display.pane if self.text_display is not None else None
-        is_modified = pane is not None and pane.modified
-        # C? hay algun caso donde ejecutemos esta función y el text_display.pane sea None??
+        pane = self.text_display.pane
+        is_modified = pane.modified
         self.state_buffer_is_modified = is_modified  # keeps the (still global) menu logic working
         self._menu.actions["file__save"].setEnabled(is_modified)
         # Reload reverts to the saved file, so it only makes sense for a modified, named buffer
@@ -959,21 +958,26 @@ class MainApp(QMainWindow):
         return "cancel"
 
     async def reload(self):
-        """Revert the active buffer to the file on disk, dropping unsaved changes (asks first)."""
+        """Revert the active buffer to the file on disk, dropping unsaved changes (asks first).
+
+        The Reload menu item is enabled only for a modified, named buffer, so we trust that: the
+        active entry exists, has a filepath and a window. If not, this rightfully blows up.
+        """
         entry = self._active_entry()
-        if entry is None or entry.win_id is None or not entry.filepath or not entry.pane.modified:
-            # C? no me gusta este "stay safe", implica que tuvimos un error en otro lado pero lo estamos ocultando acá; prefiero fallar y no tener tanto código que revisa todo mil veces... si fallamos lo arreglamos y listo
-            return  # nothing to revert (the menu item should already be disabled, but stay safe)
-        if not await self._ask_reload(entry.filepath):
+        # parent the prompt to the pane's own window so closing it returns activation there
+        window = self._detached.get(entry.pane, self)
+        proceed = await self._ask_reload(window, entry.filepath)
+        QTimer.singleShot(0, self.focus_active_editor)  # give focus back to the editor after it
+        if not proceed:
             return
         # ':edit!' reloads the file, dropping the unsaved changes; run it in the pane's own window
         # so it targets the right buffer even if focus has moved on
         self.nvi.future_request("nvim_call_function", "win_execute", [entry.win_id, "edit!"])
 
-    async def _ask_reload(self, filepath):
+    async def _ask_reload(self, parent, filepath):
         """Ask the user to confirm discarding unsaved changes; return True to proceed."""
         name = os.path.basename(filepath)
-        dlg = QMessageBox(self)
+        dlg = QMessageBox(parent)
         dlg.setIcon(QMessageBox.Icon.Warning)
         dlg.setWindowTitle("Reload")
         dlg.setText(f"{name!r} has unsaved changes.")
@@ -1059,7 +1063,13 @@ class MainApp(QMainWindow):
         """
         if entry is None or entry.win_id is None:
             return
-        filename, _ = QFileDialog.getSaveFileName(self, "Save File", "", "")
+        # parent the dialog to the pane's own window (the detached one, if any) so that closing it
+        # returns activation there, not to the main window
+        parent = self._detached.get(entry.pane, self)
+        filename, _ = QFileDialog.getSaveFileName(parent, "Save File", "", "")
+        # returning from the dialog leaves focus on its parent window's frame; hand it back to the
+        # editor (deferred, so it runs after Qt finishes re-activating the window)
+        QTimer.singleShot(0, self.focus_active_editor)
         if not filename:
             return
         # run 'saveas!' in that window's context (it may not be the active one); vim.cmd.saveas
