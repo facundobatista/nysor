@@ -432,14 +432,12 @@ class NvimNotifications:
 
     def _n_redraw__win_hide(self, *args):
         """Handle windows no longer shown (e.g. belonging to an inactive tabpage)."""
-        # FIXME.90: relevant for multi-tab; for now nothing to do with a single window
 
     def _n_redraw__win_close(self, *args):
         """Handle closed windows; the paired grid_destroy cleans the registry."""
 
     def _n_redraw__win_viewport_margins(self, *args):
         """Window internal margins (winbar, borders). Accepted and ignored for now."""
-        # FIXME.90: use it in adjust_viewport when a winbar/border is present
 
     def _n_redraw__msg_set_pos(self, *args):
         """Define which grid is the message grid and where it starts."""

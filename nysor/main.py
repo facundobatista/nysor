@@ -532,6 +532,12 @@ class MainApp(QMainWindow):
         # per Neovim window. Panes are created on demand; the first is pre-created here and
         # claimed by the first window. 'text_display' tracks the active editor display.
         self.tabs = QTabWidget()
+        # show each file name in full (no eliding, so nothing is squeezed); tabs take their natural
+        # width, and when they overflow the bar shows scroll buttons instead of shrinking them. The
+        # full path is in each tab's tooltip (see _refresh_tab_label).
+        self.tabs.setElideMode(Qt.TextElideMode.ElideNone)
+        self.tabs.setUsesScrollButtons(True)
+        self.tabs.tabBar().setExpanding(False)
         self.main_layout.addWidget(self.tabs, stretch=1)
 
         self._unclaimed_pane = EditorPane(self)
@@ -602,8 +608,22 @@ class MainApp(QMainWindow):
         entry = self._active_entry()
         return entry.filepath if entry is not None else None
 
+    @staticmethod
+    def _window_title(filepath):
+        """Build a window title: '{name} ({dir, ~-collapsed}) - Nysor' (or '[No Name] - Nysor')."""
+        if not filepath:
+            return "[No Name] - Nysor"
+        name = os.path.basename(filepath)
+        basedir = os.path.dirname(filepath)
+        home = os.path.expanduser("~")
+        if basedir == home:
+            basedir = "~"
+        elif basedir.startswith(home + os.sep):
+            basedir = "~" + basedir[len(home):]
+        return f"{name} ({basedir}) - Nysor"
+
     def _refresh_main_title(self):
-        """Set the main window title to its CURRENT tab's filepath.
+        """Set the main window title to its CURRENT tab's file (full info; see _window_title).
 
         It follows the shown tab, not the globally-active editor: while you work in a detached
         window, the main window keeps showing (and titling) its own current tab.
@@ -612,7 +632,7 @@ class MainApp(QMainWindow):
         grid = self.grids.get_grid_by_pane(pane) if pane is not None else None
         entry = self.grids.get_entry_by_grid(grid)
         path = entry.filepath if entry is not None else None
-        self.setWindowTitle(path or "Nysor")
+        self.setWindowTitle(self._window_title(path))
 
     def _refresh_tab_label(self, grid_id):
         """Rebuild a window grid's label (tab text or detached-window title) from its filepath."""
@@ -620,16 +640,19 @@ class MainApp(QMainWindow):
         if entry is None:
             logger.warning("_refresh_tab_label for a grid with no entry: {}", grid_id)
             return
+        window = self._detached.get(entry.pane)
+        if window is not None:
+            window.setWindowTitle(self._window_title(entry.filepath))
+            return
+        # tab text stays short (basename + modified marker); the tab bar elides long names and the
+        # tooltip carries the full path
         name = os.path.basename(entry.filepath) if entry.filepath else "[No Name]"
         if entry.pane.modified:
             name = f"● {name}"
-        window = self._detached.get(entry.pane)
-        if window is not None:
-            window.setWindowTitle(name)
-            return
         index = self.tabs.indexOf(entry.pane)
         if index != -1:
             self.tabs.setTabText(index, name)
+            self.tabs.setTabToolTip(index, entry.filepath or "[No Name]")
         self._refresh_main_title()  # the current tab's filepath may have changed
 
     def refresh_tab(self, grid_id):
@@ -1483,8 +1506,12 @@ def start():
         else:
             raise ValueError("Cannot specify special '-' among other paths")
     else:
-        # avoid duplicates in the given paths
-        requested_paths = sorted({os.path.realpath(path) for path in args.path})
+        # avoid duplicates in the given paths but keep order (args.path will be short almost
+        # always, we can find in the list, no need for more advanced algos)
+        requested_paths = []
+        for path in args.path:
+            if path not in requested_paths:
+                requested_paths.append(path)
 
     # setup logging and create the app itself
     logsetup(args.loglevel)
