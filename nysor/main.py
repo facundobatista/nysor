@@ -198,15 +198,17 @@ class MainMenu:
     """Build a menu bar on a window, filtered by scope.
 
     A single definition serves every window: each entry is tagged with the windows that show it --
-    'main' (app-level actions and dev tools, only the main window) or 'all' (editor actions plus
-    the universal Help, shown on every window). The main window shows everything; a detached editor
-    window shows only the 'all' entries (so it gets Save/Save As/Close and Help, but not
-    New/Open/Exit nor Debug). The handlers act on the ACTIVE editor, which is the window whose menu
-    you clicked (clicking a menu activates its window).
+    'main' (app-level actions and dev tools, only the main window), 'all' (editor actions plus the
+    universal Help, shown on every window), or 'detached' (only a detached editor window, e.g.
+    Re-attach). The main window shows main+all; a detached editor window shows all+detached (so it
+    gets Save/Save As/Reload/Close and Help, plus Re-attach, but not New/Open/Exit nor Debug). The
+    handlers act on the ACTIVE editor, which is the window whose menu you clicked (clicking a menu
+    activates its window).
     """
 
     SCOPE_MAIN = "main"  # only the main window
-    SCOPE_ALL = "all"    # every window, main and detached
+    SCOPE_ALL = "all"  # every window, main and detached
+    SCOPE_DETACHED = "detached"  # only a detached editor window
 
     # (label, handler-suffix, scope); (None, None, None) is a separator
     MENU = {
@@ -218,6 +220,10 @@ class MainMenu:
             ("S&ave as...", "file__save_as", SCOPE_ALL),
             (None, None, None),
             ("&Reload", "file__reload", SCOPE_ALL),
+            # Detach/Re-attach share this slot: the main window only ever shows a tab (-> Detach),
+            # a detached window only ever shows its own pane (-> Re-attach); never both at once
+            ("&Detach", "window__detach", SCOPE_MAIN),
+            ("R&e-attach", "window__reattach", SCOPE_DETACHED),
             ("&Close", "file__close_tab", SCOPE_ALL),
             ("E&xit", "file__exit", SCOPE_MAIN),
         ],
@@ -308,6 +314,16 @@ class MainMenu:
     def _on__file__reload(self):
         """Revert the active buffer to the saved file, dropping unsaved changes (asks first)."""
         call_async(self._main_window.reload)
+
+    @_log_action
+    def _on__window__detach(self):
+        """Pull the active tab out into its own detached window."""
+        self._main_window.detach_active_pane()
+
+    @_log_action
+    def _on__window__reattach(self):
+        """Move the active (detached) editor back into the main window as a tab."""
+        self._main_window.reattach_active_pane()
 
     @_log_action
     def _on__file__close_tab(self):
@@ -503,8 +519,9 @@ class DetachedWindow(QMainWindow):
         super().__init__()
         self._app = app
         self._pane = pane
-        # every-window menu (Save / Save As / Close + Help), acting on this editor once focused
-        self._menu = MainMenu(app, self, {MainMenu.SCOPE_ALL})
+        # menu for a detached editor: the every-window entries plus the detached-only Re-attach,
+        # all acting on this editor once its window is focused
+        self._menu = MainMenu(app, self, {MainMenu.SCOPE_ALL, MainMenu.SCOPE_DETACHED})
         self.setCentralWidget(pane)
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
         self.refresh_menu_state()  # set Save/Reload to match the pane before it is first focused
@@ -523,12 +540,17 @@ class DetachedWindow(QMainWindow):
             self._app.activate_pane(self._pane)
 
     def closeEvent(self, event):
-        """Re-attach the pane as a tab instead of destroying it (unless the app is quitting)."""
+        """Close this window's buffer (prompting on unsaved changes); Re-attach keeps it instead.
+
+        We never let Qt destroy the window here: closing the buffer's Neovim window is what tears
+        the detached window down for real (via the resulting grid_destroy). The exception is a
+        whole app quit, where the window is expected to just go.
+        """
         if self._app.is_closing():
             event.accept()  # the whole app is going down; let this window close
             return
         event.ignore()
-        self._app.reattach_pane(self._pane)
+        self._app.close_pane(self._pane)
 
 
 class MainApp(QMainWindow):
@@ -899,6 +921,14 @@ class MainApp(QMainWindow):
         """Close the active tab (see close_tab)."""
         await self.close_tab(self._active_entry())
 
+    def close_pane(self, pane):
+        """Close a specific editor pane's buffer, prompting on unsaved changes (see close_tab).
+
+        Used by a detached window's X button, which must target its own pane rather than whatever
+        editor happens to be active.
+        """
+        call_async(self.close_tab, self._entry_for_pane(pane))
+
     async def close_tab(self, entry):
         """Close a tab from the GUI, prompting if its buffer has unsaved changes.
 
@@ -915,8 +945,11 @@ class MainApp(QMainWindow):
             return
 
         if entry.pane.modified:
-            choice = await self._ask_close_modified(entry.filepath)
+            # parent the prompt to the pane's own window so closing it returns activation there
+            window = self._detached.get(entry.pane, self)
+            choice = await self._ask_close_modified(window, entry.filepath)
             if choice == "cancel":
+                QTimer.singleShot(0, self.focus_active_editor)  # aborted; back to the editor
                 return
             if choice == "save":
                 # write this window's buffer first, then close it (order is preserved: the write
@@ -932,14 +965,14 @@ class MainApp(QMainWindow):
                 return
         self.nvi.future_request("nvim_win_close", entry.win_id, False)
 
-    async def _ask_close_modified(self, filepath):
+    async def _ask_close_modified(self, parent, filepath):
         """Ask the user how to close a tab with unsaved changes; return save/discard/cancel."""
         name = os.path.basename(filepath) if filepath else "[No Name]"
-        dlg = QMessageBox(self)
+        dlg = QMessageBox(parent)
         dlg.setIcon(QMessageBox.Icon.Warning)
         dlg.setWindowTitle("Unsaved changes")
         dlg.setText(f"{name!r} has unsaved changes.")
-        dlg.setInformativeText("Save it before closing the tab?")
+        dlg.setInformativeText("Save it before closing?")
         save_btn = dlg.addButton(QMessageBox.StandardButton.Save)
         discard_btn = dlg.addButton(QMessageBox.StandardButton.Discard)
         dlg.addButton(QMessageBox.StandardButton.Cancel)
@@ -1174,6 +1207,14 @@ class MainApp(QMainWindow):
         # pin the grid to the detached window size now (it was pinned to the smaller tab area, and
         # detaching the ACTIVE tab keeps it active, so no set_active_editor fires to re-pin it)
         self.resize_editor_grid(pane.text_display)
+
+    def detach_active_pane(self):
+        """Detach the active tab into its own window (menu action)."""
+        self.detach_tab(self._active_entry())
+
+    def reattach_active_pane(self):
+        """Re-attach the active detached editor back into the tab strip (menu action)."""
+        self.reattach_pane(self.text_display.pane)
 
     def reattach_pane(self, pane):
         """Move a detached pane back into the tab strip and drop its window."""
@@ -1428,7 +1469,8 @@ class MainApp(QMainWindow):
         for entry in self.grids.get_all_entries():  # snapshot: closing mutates the registry
             if entry.win_id is None or not entry.pane.modified:
                 continue
-            choice = await self._ask_close_modified(entry.filepath)
+            choice = await self._ask_close_modified(
+                self._detached.get(entry.pane, self), entry.filepath)
             if choice == "cancel":
                 self._closing = 0  # abort: already-closed editors stay closed, the rest stay open
                 return
