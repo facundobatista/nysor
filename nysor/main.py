@@ -199,13 +199,15 @@ class MainMenu:
 
     A single MENU serves the three places a menu appears; each entry declares the SET of scopes it
     belongs to: SCOPE_MAIN (the main window's menu bar), SCOPE_DETACHED (a detached window's menu
-    bar), SCOPE_TAB (a tab's right-click context menu). One MainMenu instance builds for exactly
-    one scope: `attach_bar(host)` for the two menu bars, `build_popup(parent)` for the popup.
+    bar), SCOPE_TAB (a tab's right-click context menu). One MainMenu is tied to its `host` window
+    and one scope: `attach_bar()` builds the two menu bars, `build_popup()` the popup. When a menu
+    closes, focus returns to its host window's editor (never a global "active" one).
 
     Entry-scoped actions (Save, Save As, Reload, Detach, Re-attach, Close) act on a `target` -- a
     callable returning the GridEntry the menu operates on: the main bar targets its current tab,
-    a detached bar targets its own pane, a context menu targets the right-clicked tab. So the same
-    handler serves every scope; only the target differs.
+    a detached bar targets its own pane, a context menu targets the right-clicked tab. The `app`
+    (a MainApp) is where those operations live. So the same handler serves every scope; only the
+    target differs.
     """
 
     SCOPE_MAIN = 1
@@ -241,28 +243,29 @@ class MainMenu:
         ],
     }
 
-    def __init__(self, main_window, scope, target):
-        self._main_window = main_window
+    def __init__(self, app, host, scope, target):
+        self._app = app  # the MainApp, where the entry-scoped operations live
+        self._host = host  # the QMainWindow this menu belongs to (its focus returns here on close)
         self._scope = scope
         self._target = target  # callable -> the GridEntry the entry-scoped actions act on
         self.actions = {}
 
-    def attach_bar(self, host):
-        """Build a persistent menu bar on a window (SCOPE_MAIN / SCOPE_DETACHED)."""
-        menu_bar = host.menuBar()
+    def attach_bar(self):
+        """Build a persistent menu bar on this menu's host window (SCOPE_MAIN / SCOPE_DETACHED)."""
+        menu_bar = self._host.menuBar()
         for title, options in self.MENU.items():
             kept = [entry for entry in options if self._in_scope(entry)]
             if not any(name for (_label, name, _scopes) in kept):
                 continue  # every real entry was filtered out -> do not add an empty menu
             menu = menu_bar.addMenu(title)
             # Qt leaves keyboard focus on the menu bar after a menu closes (e.g. via Esc); hand it
-            # back to the editor so typing reaches Neovim again
+            # back to the host window's editor so typing reaches Neovim again
             menu.aboutToHide.connect(self._restore_editor_focus)
             self._fill(menu, kept)
 
-    def build_popup(self, parent):
-        """Build a transient context menu (SCOPE_TAB); the caller exec()s it."""
-        menu = QMenu(parent)
+    def build_popup(self):
+        """Build a transient context menu (SCOPE_TAB) on the host window; the caller exec()s it."""
+        menu = QMenu(self._host)
         menu.aboutToHide.connect(self._restore_editor_focus)
         # flat: only the File entries carry SCOPE_TAB, so the top-level grouping does not matter
         kept = [entry for options in self.MENU.values()
@@ -279,9 +282,11 @@ class MainMenu:
     def _restore_editor_focus(self):
         """Return focus to the active editor once the closing menu is gone.
 
-        Deferred with a zero timer so it runs after Qt's own focus handling settles.
+        Targets the ACTIVE editor (not the host window): a plain dismiss leaves it on the host's
+        editor, but Detach/Re-attach/Close move or destroy that editor, so focus must follow it.
+        Deferred with a zero timer so it runs after Qt's focus handling (and the action) settle.
         """
-        QTimer.singleShot(0, self._main_window.focus_active_editor)
+        QTimer.singleShot(0, self._app.focus_active_editor)
 
     def _fill(self, menu, entries):
         """Add entries to a menu, dropping leading/trailing/double separators left by filtering."""
@@ -324,47 +329,47 @@ class MainMenu:
     @_log_action
     def _on__file__new(self):
         """Open a new empty tab."""
-        self._main_window.new_file()
+        self._app.new_file()
 
     @_log_action
     def _on__file__open(self):
         """Open a file (deduplicated across instances; see MainApp.open_file_dialog)."""
-        self._main_window.open_file_dialog()
+        self._app.open_file_dialog()
 
     @_log_action
     def _on__file__save(self):
         """Save the target editor, asking for a name if it does not have one yet."""
-        self._main_window.save_entry(self._target())
+        self._app.save_entry(self._target())
 
     @_log_action
     def _on__file__save_as(self):
         """Save the target editor to a new file."""
-        self._main_window.save_entry_as(self._target())
+        self._app.save_entry_as(self._target())
 
     @_log_action
     def _on__file__reload(self):
         """Revert the target editor to the saved file, dropping unsaved changes (asks first)."""
-        call_async(self._main_window.reload, self._target())
+        call_async(self._app.reload, self._target())
 
     @_log_action
     def _on__window__detach(self):
         """Pull the target tab out into its own detached window."""
-        self._main_window.detach_tab(self._target())
+        self._app.detach_tab(self._target())
 
     @_log_action
     def _on__window__reattach(self):
         """Move the target (detached) editor back into the main window as a tab."""
-        self._main_window.reattach_pane(self._target().pane)
+        self._app.reattach_pane(self._target())
 
     @_log_action
     def _on__file__close_tab(self):
         """Close the target editor (its Neovim window)."""
-        call_async(self._main_window.close_tab, self._target())
+        call_async(self._app.close_tab, self._target())
 
     @_log_action
     def _on__file__exit(self):
         """Exit the application."""
-        self._main_window.close_gui()
+        self._app.close_gui()
 
     @_log_action
     def _on__debug__blocking_call(self):
@@ -376,7 +381,7 @@ class MainMenu:
         """Run an async task; this is a test/dev helper."""
 
         async def async_task():
-            result = await self._main_window.nvi.call("nvim_list_uis")
+            result = await self._app.nvi.call("nvim_list_uis")
             logger.info("Code run in an async task, listing UIs from Neovim: {}", result)
 
         asyncio.create_task(async_task())
@@ -389,7 +394,7 @@ class MainMenu:
     @_log_action
     def _on__help__create_issue(self):
         """Open the issue tracker in the browser."""
-        dialog = CreateIssueDialog(self._main_window)
+        dialog = CreateIssueDialog(self._host)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -399,8 +404,8 @@ class MainMenu:
     @_log_action
     def _on__help__about(self):
         """Show the About dialog."""
-        msg = _ABOUT_TEXT.format(version=self._main_window.nysor_version)
-        dlg = QMessageBox(self._main_window)
+        msg = _ABOUT_TEXT.format(version=self._app.nysor_version)
+        dlg = QMessageBox(self._host)
         dlg.setTextFormat(Qt.TextFormat.RichText)
         dlg.setIconPixmap(QIcon("nysor/imgs/icon-1024.png").pixmap(128, 128))
         dlg.setWindowTitle("About Nysor")
@@ -551,10 +556,10 @@ class DetachedWindow(QMainWindow):
         super().__init__()
         self._app = app
         self._pane = pane
-        # a detached window's menu bar, acting on its OWN pane (not whatever editor is active)
-        self._menu = MainMenu(app, MainMenu.SCOPE_DETACHED,
-                              lambda: app._entry_for_pane(self._pane))
-        self._menu.attach_bar(self)
+        # a detached window's menu bar (host=self), acting on its OWN pane (not the active editor)
+        self._menu = MainMenu(
+            app, self, MainMenu.SCOPE_DETACHED, lambda: app.grids.get_entry_by_pane(self._pane))
+        self._menu.attach_bar()
         self.setCentralWidget(pane)
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
         self.refresh_menu_state()  # set Save/Reload to match the pane before it is first focused
@@ -589,10 +594,11 @@ class MainApp(QMainWindow):
     def __init__(self, version, loop, paths_to_open, nvim_exec_path):
         super().__init__()
         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
-        # the main window's menu bar, acting on whatever tab is currently shown
-        self._menu = MainMenu(self, MainMenu.SCOPE_MAIN,
-                              lambda: self._entry_for_pane(self.tabs.currentWidget()))
-        self._menu.attach_bar(self)
+        # the main window's menu bar (app and host are both self), acting on the current tab
+        self._menu = MainMenu(
+            self, self, MainMenu.SCOPE_MAIN,
+            lambda: self.grids.get_entry_by_pane(self.tabs.currentWidget()))
+        self._menu.attach_bar()
         self.nysor_version = version
 
         self._closing = 0
@@ -706,22 +712,20 @@ class MainApp(QMainWindow):
             window.refresh_menu_state()
 
     def focus_active_editor(self):
-        """Give keyboard focus back to the active editor (e.g. after a menu closes)."""
+        """Give keyboard focus back to the active editor (the one Neovim currently has current).
+
+        This follows the ACTIVE editor, not any particular window: after a menu action that moves
+        the editor (Detach) or destroys its window (Re-attach, Close), focus must go where the
+        editor went; for a plain menu dismiss the active editor is already the host's, so it stays.
+        """
         if self.text_display is not None:
             self.text_display.setFocus()
-
-    def _entry_for_pane(self, pane):
-        """Return the GridEntry backing a given editor pane, or None."""
-        if pane is None:
-            return None
-        grid = self.grids.get_grid_by_pane(pane)
-        return self.grids.get_entry_by_grid(grid)
 
     def _active_entry(self):
         """Return the GridEntry backing the active tab, or None."""
         if self.text_display is None:
             return None
-        return self._entry_for_pane(self.text_display.pane)
+        return self.grids.get_entry_by_pane(self.text_display.pane)
 
     @staticmethod
     def _window_title(filepath):
@@ -941,7 +945,7 @@ class MainApp(QMainWindow):
         Used by a detached window's X button, which must target its own pane rather than whatever
         editor happens to be active.
         """
-        call_async(self.close_tab, self._entry_for_pane(pane))
+        call_async(self.close_tab, self.grids.get_entry_by_pane(pane))
 
     async def close_tab(self, entry):
         """Close a tab from the GUI, prompting if its buffer has unsaved changes.
@@ -1065,10 +1069,10 @@ class MainApp(QMainWindow):
         index = tab_bar.tabAt(pos)
         if index == -1:
             return
-        entry = self._entry_for_pane(self.tabs.widget(index))
+        entry = self.grids.get_entry_by_pane(self.tabs.widget(index))
         # a transient menu targeting THIS tab; the QAction handlers run via their triggered signal
-        popup = MainMenu(self, MainMenu.SCOPE_TAB, lambda: entry)
-        popup.build_popup(self).exec(tab_bar.mapToGlobal(pos))
+        popup = MainMenu(self, self, MainMenu.SCOPE_TAB, lambda: entry)
+        popup.build_popup().exec(tab_bar.mapToGlobal(pos))
 
     def save_entry(self, entry):
         """Write a tab's buffer; if it has no filename yet, ask for one."""
@@ -1090,10 +1094,10 @@ class MainApp(QMainWindow):
             return
         # parent the dialog to the pane's own window (the detached one, if any) so that closing it
         # returns activation there, not to the main window
-        parent = self._detached.get(entry.pane, self)
-        filename, _ = QFileDialog.getSaveFileName(parent, "Save File", "", "")
+        window = self._detached.get(entry.pane, self)
+        filename, _ = QFileDialog.getSaveFileName(window, "Save File", "", "")
         # returning from the dialog leaves focus on its parent window's frame; hand it back to the
-        # editor (deferred, so it runs after Qt finishes re-activating the window)
+        # active editor (deferred, so it runs after Qt finishes re-activating the window)
         QTimer.singleShot(0, self.focus_active_editor)
         if not filename:
             return
@@ -1200,8 +1204,9 @@ class MainApp(QMainWindow):
         # detaching the ACTIVE tab keeps it active, so no set_active_editor fires to re-pin it)
         self.resize_editor_grid(pane.text_display)
 
-    def reattach_pane(self, pane):
+    def reattach_pane(self, entry):
         """Move a detached pane back into the tab strip and drop its window."""
+        pane = entry.pane
         window = self._detached.pop(pane, None)
         if window is None:
             return

@@ -171,6 +171,10 @@ class GridRegistry:
         """Return the grid backed by the given Qt pane, or None."""
         return self._by_pane.get(pane)
 
+    def get_entry_by_pane(self, pane) -> GridEntry | None:
+        """Return the entry backed by the given Qt pane, or None."""
+        return self.get_entry_by_grid(self.get_grid_by_pane(pane))
+
     def get_all_entries(self) -> list:
         """Return all window grid entries."""
         return list(self._by_grid.values())

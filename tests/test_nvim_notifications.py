@@ -355,6 +355,15 @@ class TestGridRegistry:
         assert reg.get_entry_by_path("/some/path").grid_id == 4
         assert reg.get_entry_by_path("/nope") is None
 
+    def test_get_entry_by_pane(self):
+        """get_entry_by_pane returns the entry backed by the pane, or None for unknown/None."""
+        reg = GridRegistry()
+        pane = object()
+        entry = reg.add_grid(2, pane)
+        assert reg.get_entry_by_pane(pane) is entry
+        assert reg.get_entry_by_pane(object()) is None
+        assert reg.get_entry_by_pane(None) is None
+
     def test_records_lists_all_windows(self):
         """records() returns every window grid record."""
         reg = GridRegistry()
