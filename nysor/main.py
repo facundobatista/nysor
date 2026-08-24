@@ -29,12 +29,13 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollBar,
     QSizePolicy,
+    QTabBar,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
-from PyQt6.QtCore import Qt, QEvent, QTimer
+from PyQt6.QtCore import Qt, QEvent, QSize, QTimer
 from PyQt6.QtGui import QIcon, QAction
 
 
@@ -541,6 +542,55 @@ class EditorPane(QWidget):
         self.main_window.nvi.future_request("nvim_command", f"normal! {abs(delta)}{cmdkey}")
 
 
+class EditorTabBar(QTabBar):
+    """The tab strip's bar: drag to reorder (setMovable), or drag a tab out to detach it.
+
+    Reorder is safe because everything is keyed by pane, not tab index (the QTabWidget owns order).
+    Detach is decided on release: we remember the pane pressed on and, if the mouse lets go outside
+    the main window, we ask to detach that pane. Holding the pane object (not an index) makes this
+    robust to the reordering that happens mid-drag.
+    """
+
+    def __init__(self, pane_at, detach):
+        super().__init__()
+        self.setMovable(True)  # drag within the bar reorders tabs
+        self._pane_at = pane_at  # index -> pane (None if the index is invalid)
+        self._detach = detach  # pane -> pull it out into its own window
+        self._pressed_pane = None
+
+    def sizeHint(self):
+        """Span the full width so the strip reaches past its tabs into empty, draggable space.
+
+        Without this the bar is only as wide as its tabs, so dragging a tab rightwards pulls it off
+        the bar's own rect and it gets clipped/hidden. The extra width never stretches the tabs
+        (setExpanding stays False); it is just reachable empty space (right-clicked for New/Open).
+        """
+        hint = super().sizeHint()
+        parent = self.parent()
+        width = parent.width() if parent is not None else hint.width()
+        return QSize(max(hint.width(), width), hint.height())
+
+    def mousePressEvent(self, event):
+        """Remember which pane a left-drag starts on, so a pull-off can detach the right one."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._pressed_pane = self._pane_at(self.tabAt(event.position().toPoint()))
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Let the bar finish its reorder; then, if released outside the main window, detach."""
+        pane = self._pressed_pane
+        self._pressed_pane = None
+        pos = event.globalPosition().toPoint()
+        dropped_out = pane is not None and not self._inside_window(pos)
+        super().mouseReleaseEvent(event)
+        if dropped_out:
+            self._detach(pane)
+
+    def _inside_window(self, global_pos):
+        """Whether a global point falls within the main window (its whole frame)."""
+        return self.window().frameGeometry().contains(global_pos)
+
+
 class DetachedWindow(QMainWindow):
     """An editor pane pulled out of the tab strip into its own OS window.
 
@@ -644,6 +694,8 @@ class MainApp(QMainWindow):
         # per Neovim window. Panes are created on demand; the first is pre-created here and
         # claimed by the first window. 'text_display' tracks the active editor display.
         self.tabs = QTabWidget()
+        # custom bar: drag to reorder, or pull a tab off the strip to detach it into its own window
+        self.tabs.setTabBar(EditorTabBar(self.tabs.widget, self._detach_pane))
         # show each file name in full (no eliding, so nothing is squeezed); tabs take their natural
         # width, and when they overflow the bar shows scroll buttons instead of shrinking them. The
         # full path is in each tab's tooltip (see _refresh_tab_label).
@@ -659,14 +711,12 @@ class MainApp(QMainWindow):
         # switching a tab from the GUI must move Neovim (see _on_tab_changed)
         self.tabs.currentChanged.connect(self._on_tab_changed)
 
-        # right-clicking a tab offers per-tab File actions (see _show_tab_menu); the tab bar only
-        # spans the tabs themselves, so right-clicking the empty part of the header row reaches the
-        # QTabWidget instead and offers New/Open (see _show_new_open_menu)
+        # the bar spans the whole header row, so a single context handler covers it: right-clicking
+        # a tab offers per-tab File actions, the empty area to their right offers New/Open (see
+        # _show_tab_menu)
         tab_bar = self.tabs.tabBar()
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self._show_tab_menu)
-        self.tabs.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.tabs.customContextMenuRequested.connect(self._show_new_open_menu)
 
         # editor-wide font and cursor mode: owned here (the editor layer), remembered so tabs
         # created later start with the right values
@@ -1043,20 +1093,12 @@ class MainApp(QMainWindow):
 
         return dlg.clickedButton() is discard_btn
 
-    def _show_new_open_menu(self, pos):
-        """Show a New/Open context menu when the empty part of the tab-bar row is right-clicked.
-
-        This handler is on the whole QTabWidget, so it also fires for right-clicks on the page
-        area (the editor); we ignore those (only the header row, above the pages, is ours) and let
-        the editor handle its own. `pos` is in the QTabWidget's coordinates.
-        """
-        if pos.y() > self.tabs.tabBar().height():
-            return  # below the tab-bar row -> the editor area, not our menu
-
+    def _show_new_open_menu(self, global_pos):
+        """Show a New/Open context menu (the empty part of the tab-bar row was right-clicked)."""
         menu = QMenu(self)
         new_act = menu.addAction("New")
         open_act = menu.addAction("Open...")
-        chosen = menu.exec(self.tabs.mapToGlobal(pos))
+        chosen = menu.exec(global_pos)
 
         if chosen is new_act:
             self.new_file()
@@ -1064,10 +1106,11 @@ class MainApp(QMainWindow):
             self.open_file_dialog()
 
     def _show_tab_menu(self, pos):
-        """Show the per-tab context menu for the right-clicked tab, from the shared MENU."""
+        """Context menu: per-tab File actions on a tab, New/Open on the empty strip area."""
         tab_bar = self.tabs.tabBar()
         index = tab_bar.tabAt(pos)
         if index == -1:
+            self._show_new_open_menu(tab_bar.mapToGlobal(pos))
             return
         entry = self.grids.get_entry_by_pane(self.tabs.widget(index))
         # a transient menu targeting THIS tab; the QAction handlers run via their triggered signal
@@ -1177,6 +1220,10 @@ class MainApp(QMainWindow):
         if pane is None or self.text_display is None:
             return  # no current tab / no active display: only while tearing down, nothing to do
         self.activate_pane(pane)
+
+    def _detach_pane(self, pane):
+        """Detach a pane pulled off the tab bar (see EditorTabBar)."""
+        self.detach_tab(self.grids.get_entry_by_pane(pane))
 
     def detach_tab(self, entry):
         """Pull a tab's editor pane out into its own OS window (see DetachedWindow)."""
