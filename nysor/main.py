@@ -202,7 +202,7 @@ class MainMenu:
     belongs to: SCOPE_MAIN (the main window's menu bar), SCOPE_DETACHED (a detached window's menu
     bar), SCOPE_TAB (a tab's right-click context menu). One MainMenu is tied to its `host` window
     and one scope: `attach_bar()` builds the two menu bars, `build_popup()` the popup. When a menu
-    closes, focus returns to its host window's editor (never a global "active" one).
+    closes, focus returns to its host window's editor.
 
     Entry-scoped actions (Save, Save As, Reload, Detach, Re-attach, Close) act on a `target` -- a
     callable returning the GridEntry the menu operates on: the main bar targets its current tab,
@@ -255,23 +255,19 @@ class MainMenu:
         """Build a persistent menu bar on this menu's host window (SCOPE_MAIN / SCOPE_DETACHED)."""
         menu_bar = self._host.menuBar()
         for title, options in self.MENU.items():
-            kept = [entry for entry in options if self._in_scope(entry)]
-            if not any(name for (_label, name, _scopes) in kept):
-                continue  # every real entry was filtered out -> do not add an empty menu
+            entries = [entry for entry in options if self._in_scope(entry)]
+            if not entries:
+                # every real entry was filtered out -> do not add an empty menu
+                continue
             menu = menu_bar.addMenu(title)
-            # Qt leaves keyboard focus on the menu bar after a menu closes (e.g. via Esc); hand it
-            # back to the host window's editor so typing reaches Neovim again
-            menu.aboutToHide.connect(self._restore_editor_focus)
-            self._fill(menu, kept)
+            self._fill(menu, entries)
 
     def build_popup(self):
         """Build a transient context menu (SCOPE_TAB) on the host window; the caller exec()s it."""
         menu = QMenu(self._host)
-        menu.aboutToHide.connect(self._restore_editor_focus)
-        # flat: only the File entries carry SCOPE_TAB, so the top-level grouping does not matter
-        kept = [entry for options in self.MENU.values()
-                for entry in options if self._in_scope(entry)]
-        self._fill(menu, kept)
+        # only the File entries carry SCOPE_TAB
+        entries = [entry for entry in self.MENU["&File"] if self._in_scope(entry)]
+        self._fill(menu, entries)
         self.apply_enable_state()
         return menu
 
@@ -306,6 +302,10 @@ class MainMenu:
             self.actions[name] = action
             menu.addAction(action)
             have_action = True
+
+        # when closing the menu (e.g. via Esc); ensure the focus comes back to the window's
+        # editor so typing reaches Neovim again
+        menu.aboutToHide.connect(self._restore_editor_focus)
 
     def apply_enable_state(self):
         """Enable/disable the state-dependent items for this menu's current target editor."""

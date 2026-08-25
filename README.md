@@ -65,12 +65,14 @@ These are the items lousely grouped to get there:
 
 **For 0.7:**
 - MULTIWINDOWS!!!
-- Anything else?
+    - quality check
+    - unit tests?
 
 **For 0.8:**
 - allow double-level logging (user selected to terminal, debug to a file if configured)
 - FIXME.94 allow logging system to use `logger.trace`
 - Improve swarm discover latency
+- docs/2026-08-24-optimizations.md
 
 
 **For 1.0:**
