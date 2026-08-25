@@ -42,7 +42,7 @@ from PyQt6.QtGui import QIcon, QAction
 from nysor import swarm
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
-from nysor.nvim_notifications import NvimNotifications
+from nysor.nvim_notifications import NvimNotifications, registry
 from nysor.text_display import TextDisplay, MIN_COLS_ROWS
 from nysor.utils import call_async
 
@@ -485,8 +485,8 @@ class EditorPane(QWidget):
 
         # get the lengths of the lines currently shown, for THIS pane's own buffer -- getbufline(0)
         # is the *alternate* buffer, not ours, so with more than one buffer it read the wrong one
-        grid = self.main_window.grids.get_grid_by_pane(self)
-        entry = self.main_window.grids.get_entry_by_grid(grid)
+        grid = registry.get_grid_by_pane(self)
+        entry = registry.get_entry_by_grid(grid)
         buf = entry.bufnr if entry is not None else None
         if buf is None:
             return  # we don't know this window's buffer yet; leave the horizontal scroll bar as is
@@ -608,7 +608,7 @@ class DetachedWindow(QMainWindow):
         self._pane = pane
         # a detached window's menu bar (host=self), acting on its OWN pane (not the active editor)
         self._menu = MainMenu(
-            app, self, MainMenu.SCOPE_DETACHED, lambda: app.grids.get_entry_by_pane(self._pane))
+            app, self, MainMenu.SCOPE_DETACHED, lambda: registry.get_entry_by_pane(self._pane))
         self._menu.attach_bar()
         self.setCentralWidget(pane)
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
@@ -647,7 +647,7 @@ class MainApp(QMainWindow):
         # the main window's menu bar (app and host are both self), acting on the current tab
         self._menu = MainMenu(
             self, self, MainMenu.SCOPE_MAIN,
-            lambda: self.grids.get_entry_by_pane(self.tabs.currentWidget()))
+            lambda: registry.get_entry_by_pane(self.tabs.currentWidget()))
         self._menu.attach_bar()
         self.nysor_version = version
 
@@ -663,7 +663,6 @@ class MainApp(QMainWindow):
         # previously-active (now hidden) window
         self._active_grid = None
         self.nvim_notifs = NvimNotifications(self)
-        self.grids = self.nvim_notifs.grids  # the central registry (single source of truth)
 
         # setup the Neovim interface
         try:
@@ -775,7 +774,7 @@ class MainApp(QMainWindow):
         """Return the GridEntry backing the active tab, or None."""
         if self.text_display is None:
             return None
-        return self.grids.get_entry_by_pane(self.text_display.pane)
+        return registry.get_entry_by_pane(self.text_display.pane)
 
     @staticmethod
     def _window_title(filepath):
@@ -798,14 +797,14 @@ class MainApp(QMainWindow):
         window, the main window keeps showing (and titling) its own current tab.
         """
         pane = self.tabs.currentWidget()
-        grid = self.grids.get_grid_by_pane(pane) if pane is not None else None
-        entry = self.grids.get_entry_by_grid(grid)
+        grid = registry.get_grid_by_pane(pane) if pane is not None else None
+        entry = registry.get_entry_by_grid(grid)
         path = entry.filepath if entry is not None else None
         self.setWindowTitle(self._window_title(path))
 
     def _refresh_tab_label(self, grid_id):
         """Rebuild a window grid's label (tab text or detached-window title) from its filepath."""
-        entry = self.grids.get_entry_by_grid(grid_id)
+        entry = registry.get_entry_by_grid(grid_id)
         if entry is None:
             logger.warning("_refresh_tab_label for a grid with no entry: {}", grid_id)
             return
@@ -832,17 +831,17 @@ class MainApp(QMainWindow):
         the existing tab and close the redundant Neovim window.
         """
         self._refresh_tab_label(grid_id)
-        entry = self.grids.get_entry_by_grid(grid_id)
+        entry = registry.get_entry_by_grid(grid_id)
         if entry is None or entry.bufnr is None:
             return
-        owner = self.grids.get_grid_by_buffer(entry.bufnr)
+        owner = registry.get_grid_by_buffer(entry.bufnr)
         if owner is not None and owner != grid_id:
             self._collapse_duplicate(grid_id, owner)
 
     def _collapse_duplicate(self, dup_grid, existing_grid):
         """Go to the tab that already owns the buffer and close the redundant window."""
-        dup = self.grids.get_entry_by_grid(dup_grid)
-        existing = self.grids.get_entry_by_grid(existing_grid)
+        dup = registry.get_entry_by_grid(dup_grid)
+        existing = registry.get_entry_by_grid(existing_grid)
         # mark the duplicate's pane as closing right away, so switching to the existing tab (which
         # may fire its own refresh) does not try to collapse in the other direction
         dup.pane.closed = True
@@ -853,7 +852,7 @@ class MainApp(QMainWindow):
 
     def set_tab_modified(self, grid_id, modified):
         """Set a window grid's modified state (label marker; menu if it is the active tab)."""
-        entry = self.grids.get_entry_by_grid(grid_id)
+        entry = registry.get_entry_by_grid(grid_id)
         if entry is None:
             return
         entry.pane.modified = modified
@@ -942,7 +941,7 @@ class MainApp(QMainWindow):
         pane = entry.pane
         bufnr = entry.bufnr
         # the grid was already forgotten, so another owner means the buffer lives in another tab
-        shown_elsewhere = bufnr is not None and self.grids.get_grid_by_buffer(bufnr) is not None
+        shown_elsewhere = bufnr is not None and registry.get_grid_by_buffer(bufnr) is not None
         if self._closing != 0 or bufnr is None or shown_elsewhere:
             self.destroy_editor_tab(pane)
             return
@@ -995,7 +994,7 @@ class MainApp(QMainWindow):
         Used by a detached window's X button, which must target its own pane rather than whatever
         editor happens to be active.
         """
-        call_async(self.close_tab, self.grids.get_entry_by_pane(pane))
+        call_async(self.close_tab, registry.get_entry_by_pane(pane))
 
     async def close_tab(self, entry):
         """Close a tab from the GUI, prompting if its buffer has unsaved changes.
@@ -1112,7 +1111,7 @@ class MainApp(QMainWindow):
         if index == -1:
             self._show_new_open_menu(tab_bar.mapToGlobal(pos))
             return
-        entry = self.grids.get_entry_by_pane(self.tabs.widget(index))
+        entry = registry.get_entry_by_pane(self.tabs.widget(index))
         # a transient menu targeting THIS tab; the QAction handlers run via their triggered signal
         popup = MainMenu(self, self, MainMenu.SCOPE_TAB, lambda: entry)
         popup.build_popup().exec(tab_bar.mapToGlobal(pos))
@@ -1170,7 +1169,7 @@ class MainApp(QMainWindow):
         updated *before* bringing it forward, so the activation this triggers is recognized as
         already-active by activate_pane and does not bounce back to Neovim.
         """
-        entry = self.grids.get_entry_by_grid(grid_id)
+        entry = registry.get_entry_by_grid(grid_id)
         if entry is None:
             logger.warning("set_active_editor for a grid with no entry: {}", grid_id)
             return
@@ -1202,8 +1201,8 @@ class MainApp(QMainWindow):
         """
         if self.text_display is not None and pane is self.text_display.pane:
             return  # already active; nothing to send back to Neovim
-        grid = self.grids.get_grid_by_pane(pane)
-        entry = self.grids.get_entry_by_grid(grid)
+        grid = registry.get_grid_by_pane(pane)
+        entry = registry.get_entry_by_grid(grid)
         if entry is None or entry.win_id is None:
             # a focusable pane should always have its Neovim window known by now
             logger.warning("focused a pane with no known Neovim window")
@@ -1223,7 +1222,7 @@ class MainApp(QMainWindow):
 
     def _detach_pane(self, pane):
         """Detach a pane pulled off the tab bar (see EditorTabBar)."""
-        self.detach_tab(self.grids.get_entry_by_pane(pane))
+        self.detach_tab(registry.get_entry_by_pane(pane))
 
     def detach_tab(self, entry):
         """Pull a tab's editor pane out into its own OS window (see DetachedWindow)."""
@@ -1260,7 +1259,7 @@ class MainApp(QMainWindow):
         window.takeCentralWidget()  # release the pane from the window without deleting it
         index = self.tabs.addTab(pane, "[No Name]")
         window.deleteLater()
-        grid = self.grids.get_grid_by_pane(pane)
+        grid = registry.get_grid_by_pane(pane)
         if grid is not None:
             self._refresh_tab_label(grid)  # restore the proper tab label and modified marker
         self.tabs.setCurrentIndex(index)  # bring it to front (activates it via _on_tab_changed)
@@ -1325,7 +1324,7 @@ class MainApp(QMainWindow):
         """
         if display.pane is None or display.font_size is None:
             return
-        grid = self.grids.get_grid_by_pane(display.pane)
+        grid = registry.get_grid_by_pane(display.pane)
         if grid is None or grid != self._active_grid:
             return  # not the current tabpage's window -> would be rejected; re-pins on activation
         font_size = display.font_size
@@ -1346,7 +1345,7 @@ class MainApp(QMainWindow):
         The editor may be a tab in the main window (select it and raise the main window) or a
         detached window (raise that one).
         """
-        entry = self.grids.get_entry_by_path(path)
+        entry = registry.get_entry_by_path(path)
         if entry is None:
             return False
         window = self._detached.get(entry.pane)
@@ -1502,7 +1501,7 @@ class MainApp(QMainWindow):
         E37). Cancel aborts the quit: already-closed editors stay closed, the rest stay open.
         """
         logger.debug("Start shutdown; resolving modified editors")
-        for entry in self.grids.get_all_entries():  # snapshot: closing mutates the registry
+        for entry in registry.get_all_entries():  # snapshot: closing mutates the registry
             if entry.win_id is None or not entry.pane.modified:
                 continue
             choice = await self._ask_close_modified(

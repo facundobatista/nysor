@@ -191,6 +191,10 @@ class GridRegistry:
         return self.get_entry_by_path(filepath) is not None
 
 
+# global and unique registry
+registry = GridRegistry()
+
+
 class NvimNotifications:
     """Dance at the rhythm of Neovim.
 
@@ -210,7 +214,6 @@ class NvimNotifications:
         self.dyncache = DynamicCache()
 
         # multigrid bookkeeping
-        self.grids = GridRegistry()
         self._grid_sizes = {}  # grid_id -> (width, height) as last reported by grid_resize
         self._msg_row = None  # top row of the message grid within the global grid
         # buffer info that arrived before its window grid was known (win_id -> (bufnr, filepath))
@@ -218,7 +221,7 @@ class NvimNotifications:
 
     def _display_for(self, grid_id):
         """Return the display that renders the given grid, or None if not rendered."""
-        kind = self.grids.get_kind_by_grid(grid_id)
+        kind = registry.get_kind_by_grid(grid_id)
         if kind == GridRegistry.GRID_GLOBAL:
             # under multigrid the global grid is empty except for the statusline row(s),
             # which the statusline strip renders (using a view origin, see below)
@@ -237,10 +240,10 @@ class NvimNotifications:
         # render/build IS the active one; mark it BEFORE build_editor_tab, whose font setup
         # relayouts the window and would otherwise resize the previously-active (now hidden) tab
         self.main_window.mark_active_grid(grid_id)
-        entry = self.grids.get_entry_by_grid(grid_id)
+        entry = registry.get_entry_by_grid(grid_id)
         if entry is None:
             display = self.main_window.build_editor_tab()
-            entry = self.grids.add_grid(grid_id, display.pane)
+            entry = registry.add_grid(grid_id, display.pane)
             size = self._grid_sizes.get(grid_id)
             if size is not None:
                 display.resize_view(size)
@@ -253,7 +256,7 @@ class NvimNotifications:
         full height but only its bottom part is on screen; that visible height is the grid's
         height minus the row where 'msg_set_pos' placed it.
         """
-        grid = self.grids.message_grid
+        grid = registry.message_grid
         if self.message_display is None or grid is None:
             return
         size = self._grid_sizes.get(grid)
@@ -304,7 +307,7 @@ class NvimNotifications:
 
     def _h__modified_changed(self, win_id: int, is_modified: bool):
         """Handle the notification when a window's buffer starts/stops having changes."""
-        grid = self.grids.get_grid_by_win(win_id)
+        grid = registry.get_grid_by_win(win_id)
         # grid may legitimately be None when the change arrives for a window we don't know yet
         if grid is not None:
             self.main_window.set_tab_modified(grid, is_modified)
@@ -315,9 +318,9 @@ class NvimNotifications:
         Records the buffer/filepath and updates the tab. If the window's grid is not known yet
         (win_pos not received), we stash it and apply it when win_pos arrives.
         """
-        grid = self.grids.get_grid_by_win(win_id)
+        grid = registry.get_grid_by_win(win_id)
         if grid is not None:
-            self.grids.set_buffer(grid, bufnr, filepath)
+            registry.set_buffer(grid, bufnr, filepath)
             self.main_window.refresh_tab(grid)
         else:
             self._pending_buffers[win_id] = (bufnr, filepath)
@@ -347,7 +350,7 @@ class NvimNotifications:
 
     def _n_redraw__flush(self, _):
         """Flush all changes to the grids."""
-        for entry in self.grids.get_all_entries():
+        for entry in registry.get_all_entries():
             entry.pane.text_display.flush()
         if self.message_display is not None:
             self.message_display.flush()
@@ -381,10 +384,10 @@ class NvimNotifications:
         """Resize grids at exactly the size Neovim reports (one redraw may carry several)."""
         for grid_id, width, height in args:
             self._grid_sizes[grid_id] = (width, height)
-            kind = self.grids.get_kind_by_grid(grid_id)
+            kind = registry.get_kind_by_grid(grid_id)
             if kind == GridRegistry.GRID_WINDOW:
                 # a not-yet-created window keeps its size in _grid_sizes; _ensure_editor applies it
-                entry = self.grids.get_entry_by_grid(grid_id)
+                entry = registry.get_entry_by_grid(grid_id)
                 if entry is not None:
                     entry.pane.text_display.resize_view((width, height))
             elif kind == GridRegistry.GRID_MESSAGE:
@@ -405,8 +408,8 @@ class NvimNotifications:
     def _n_redraw__grid_destroy(self, *args):
         """Drop grids that Neovim destroyed (their windows were closed)."""
         for (grid_id,) in args:
-            entry = self.grids.get_entry_by_grid(grid_id)
-            self.grids.forget_grid(grid_id)
+            entry = registry.get_entry_by_grid(grid_id)
+            registry.forget_grid(grid_id)
             if entry is not None:
                 # let the GUI decide what to do with that window's buffer (close it, or, if it
                 # has unsaved changes, re-show it and re-attach this tab)
@@ -424,13 +427,13 @@ class NvimNotifications:
             # active one (this is how opening a file in a new tabpage switches the GUI to it);
             # _ensure_editor marks this grid active (before its build relayouts the window)
             self._ensure_editor(grid_id)
-            self.grids.set_win(grid_id, win_id)
+            registry.set_win(grid_id, win_id)
             self.main_window.set_active_editor(grid_id)
 
             # if buffer info arrived before this window was known, apply it now
             if win_id in self._pending_buffers:
                 bufnr, filepath = self._pending_buffers.pop(win_id)
-                self.grids.set_buffer(grid_id, bufnr, filepath)
+                registry.set_buffer(grid_id, bufnr, filepath)
                 self.main_window.refresh_tab(grid_id)
         self._layout_statusline_strip()
 
@@ -447,7 +450,7 @@ class NvimNotifications:
         """Define which grid is the message grid and where it starts."""
         for batch in args:
             grid_id, row = batch[0], batch[1]
-            self.grids.set_message_grid(grid_id)
+            registry.set_message_grid(grid_id)
             self._msg_row = row
         self._layout_message_strip()
         # the message row is also the lower bound of the statusline region
@@ -537,6 +540,6 @@ class NvimNotifications:
         """Viewport info per window; routed to the owning pane (may carry several windows)."""
         # Note: can't find use to scroll_delta (maybe for smooth scrollbar?)
         for grid, _win, topline, botline, _curline, curcol, line_count, _scroll_delta in args:
-            pane = self.grids.get_pane_by_grid(grid)
+            pane = registry.get_pane_by_grid(grid)
             if pane is not None:
                 call_async(pane.adjust_viewport, topline, botline, line_count, curcol)

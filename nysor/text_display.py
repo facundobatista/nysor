@@ -27,6 +27,7 @@ from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
 
 from nysor.logical_lines import LogicalLines, CharFormat, CharUnderline
 from nysor.logtools import log_notdone
+from nysor.nvim_notifications import registry
 
 logger = logging.getLogger(__name__)
 
@@ -271,7 +272,7 @@ class BaseDisplay(QWidget):
         one can be clicked its window is registered. A missing mapping is thus a broken invariant,
         not a normal case.
         """
-        grid = self.main_window.grids.get_grid_by_pane(self.pane)
+        grid = registry.get_grid_by_pane(self.pane)
         assert grid is not None, "mouse event on a display whose pane is not in the grid registry"
         return grid
 
