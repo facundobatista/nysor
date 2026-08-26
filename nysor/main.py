@@ -261,6 +261,7 @@ class MainMenu:
                 continue
             menu = menu_bar.addMenu(title)
             self._fill(menu, entries)
+        self.apply_enable_state()
 
     def build_popup(self):
         """Build a transient context menu (SCOPE_TAB) on the host window; the caller exec()s it."""
@@ -311,11 +312,11 @@ class MainMenu:
         """Enable/disable the state-dependent items for this menu's current target editor."""
         entry = self._target()
         modified = entry is not None and entry.pane.modified
-        named = entry is not None and bool(entry.filepath)
         if "file__save" in self.actions:
             self.actions["file__save"].setEnabled(modified)
         if "file__reload" in self.actions:
             # Reload reverts to the saved file, so only for a modified, named buffer
+            named = entry is not None and bool(entry.filepath)
             self.actions["file__reload"].setEnabled(modified and named)
         if "file__open" in self.actions:
             self.actions["file__open"].setEnabled(not modified)
@@ -619,11 +620,6 @@ class DetachedWindow(QMainWindow):
         self._menu.attach_bar()
         self.setCentralWidget(pane)
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
-        self.refresh_menu_state()  # set Save/Reload to match the pane before it is first focused
-
-    def refresh_menu_state(self):
-        """Refresh this window's menu enable-state to match its own editor."""
-        self._menu.apply_enable_state()
 
     def changeEvent(self, event):
         """When this window gains focus, make its pane the active editor."""
@@ -651,11 +647,6 @@ class MainApp(QMainWindow):
     def __init__(self, version, loop, paths_to_open, nvim_exec_path):
         super().__init__()
         self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
-        # the main window's menu bar (app and host are both self), acting on the current tab
-        self._menu = MainMenu(
-            self, self, MainMenu.SCOPE_MAIN,
-            lambda: registry.get_entry_by_pane(self.tabs.currentWidget()))
-        self._menu.attach_bar()
         self.nysor_version = version
 
         self._closing = 0
@@ -713,6 +704,13 @@ class MainApp(QMainWindow):
         self._unclaimed_pane = EditorPane(self)
         self.tabs.addTab(self._unclaimed_pane, "[No Name]")
         self.text_display = self._unclaimed_pane.text_display
+
+        # the main window's menu bar (app and host are both self), acting on the current tab (must
+        # be created after we have tabs so the menu options can be enabled/disabled)
+        self._menu = MainMenu(
+            self, self, MainMenu.SCOPE_MAIN,
+            lambda: registry.get_entry_by_pane(self.tabs.currentWidget()))
+        self._menu.attach_bar()
 
         # switching a tab from the GUI must move Neovim (see _on_tab_changed)
         self.tabs.currentChanged.connect(self._on_tab_changed)
