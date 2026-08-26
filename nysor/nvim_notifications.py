@@ -6,7 +6,10 @@
 
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any
+
+from PyQt6.QtWidgets import QWidget
 
 from nysor.utils import call_async
 
@@ -46,6 +49,7 @@ class DynamicCache:
             self._data[section].clear()
 
 
+@dataclass
 class GridEntry:
     """One row of the GridRegistry: everything nysor knows about a single window grid.
 
@@ -54,13 +58,11 @@ class GridEntry:
     association among them. The Qt pane is held as an opaque reference (the registry never touches
     Qt).
     """
-
-    def __init__(self, grid_id: int, pane) -> None:
-        self.grid_id = grid_id
-        self.pane = pane
-        self.win_id: int | None = None
-        self.bufnr: int | None = None
-        self.filepath: str | None = None
+    grid_id: int
+    pane: QWidget
+    win_id: int | None = None
+    bufnr: int | None = None
+    filepath: str | None = None
 
 
 class GridRegistry:
