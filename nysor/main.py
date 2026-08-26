@@ -567,8 +567,11 @@ class EditorTabBar(QTabBar):
         """
         hint = super().sizeHint()
         parent = self.parent()
-        width = parent.width() if parent is not None else hint.width()
-        return QSize(max(hint.width(), width), hint.height())
+        if parent is None:
+            width = hint.width()
+        else:
+            width = max(hint.width(), parent.width())
+        return QSize(width, hint.height())
 
     def mousePressEvent(self, event):
         """Remember which pane a left-drag starts on, so a pull-off can detach the right one."""
@@ -578,17 +581,21 @@ class EditorTabBar(QTabBar):
 
     def mouseReleaseEvent(self, event):
         """Let the bar finish its reorder; then, if released outside the main window, detach."""
+        super().mouseReleaseEvent(event)
+
+        if self._pressed_pane is None:
+            # if we were not dragging a pane there's nothing to do
+            return
+
         pane = self._pressed_pane
         self._pressed_pane = None
-        pos = event.globalPosition().toPoint()
-        dropped_out = pane is not None and not self._inside_window(pos)
-        super().mouseReleaseEvent(event)
-        if dropped_out:
-            self._detach(pane)
 
-    def _inside_window(self, global_pos):
-        """Whether a global point falls within the main window (its whole frame)."""
-        return self.window().frameGeometry().contains(global_pos)
+        # check if we're "dropping the pane" outside the window
+        pos = event.globalPosition().toPoint()
+        inside_window = self.window().frameGeometry().contains(pos)
+
+        if not inside_window:
+            self._detach(pane)
 
 
 class DetachedWindow(QMainWindow):
