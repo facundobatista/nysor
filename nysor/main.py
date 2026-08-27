@@ -766,7 +766,7 @@ class MainApp(QMainWindow):
         """
         self._menu.apply_enable_state()
         for window in self._detached.values():
-            window.refresh_menu_state()
+            window._menu.apply_enable_state()
 
     def focus_active_editor(self):
         """Give keyboard focus back to the active editor (the one Neovim currently has current).
