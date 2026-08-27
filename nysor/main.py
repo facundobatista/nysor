@@ -84,6 +84,9 @@ Automatically Included System Information:
 # the special path that indicates to read from stdin
 SPECIAL_STDIN_PATH = "-"
 
+# what we show as a "name" if the editor still has no name ;)
+UNNAMED_NAME = "[No Name]"
+
 
 def get_nysor_version():
     """Return the Nysor version, from the installed metadata, or fallback to git."""
@@ -702,7 +705,7 @@ class MainApp(QMainWindow):
         self.main_layout.addWidget(self.tabs, stretch=1)
 
         self._unclaimed_pane = EditorPane(self)
-        self.tabs.addTab(self._unclaimed_pane, "[No Name]")
+        self.tabs.addTab(self._unclaimed_pane, UNNAMED_NAME)
         self.text_display = self._unclaimed_pane.text_display
 
         # the main window's menu bar (app and host are both self), acting on the current tab (must
@@ -785,7 +788,7 @@ class MainApp(QMainWindow):
     def _window_title(filepath):
         """Build a window title: '{name} ({dir, ~-collapsed}) - Nysor' (or '[No Name] - Nysor')."""
         if not filepath:
-            return "[No Name] - Nysor"
+            return f"{UNNAMED_NAME} - Nysor"
         name = os.path.basename(filepath)
         basedir = os.path.dirname(filepath)
         home = os.path.expanduser("~")
@@ -819,13 +822,13 @@ class MainApp(QMainWindow):
             return
         # tab text stays short (basename + modified marker); the tab bar elides long names and the
         # tooltip carries the full path
-        name = os.path.basename(entry.filepath) if entry.filepath else "[No Name]"
+        name = os.path.basename(entry.filepath) if entry.filepath else UNNAMED_NAME
         if entry.pane.modified:
             name = f"● {name}"
         index = self.tabs.indexOf(entry.pane)
         if index != -1:
             self.tabs.setTabText(index, name)
-            self.tabs.setTabToolTip(index, entry.filepath or "[No Name]")
+            self.tabs.setTabToolTip(index, entry.filepath or UNNAMED_NAME)
         self._refresh_main_title()  # the current tab's filepath may have changed
 
     def refresh_tab(self, grid_id):
@@ -901,12 +904,13 @@ class MainApp(QMainWindow):
             pane = self._reattach_pending
             self._reattach_pending = None
             return pane.text_display
+
         if self._unclaimed_pane is not None:
             pane = self._unclaimed_pane
             self._unclaimed_pane = None
         else:
             pane = EditorPane(self)
-            self.tabs.addTab(pane, "[No Name]")
+            self.tabs.addTab(pane, UNNAMED_NAME)
         # a freshly created display starts with the current editor-wide font and cursor mode
         if self._editor_font is not None:
             pane.text_display.set_font(*self._editor_font)
@@ -982,7 +986,7 @@ class MainApp(QMainWindow):
 
     def _show_close_aborted(self, filepath):
         """Tell the user we kept a tab open because its buffer had unsaved changes."""
-        name = os.path.basename(filepath) if filepath else "[No Name]"
+        name = os.path.basename(filepath) if filepath else UNNAMED_NAME
         dlg = QMessageBox(self)
         dlg.setIcon(QMessageBox.Icon.Information)
         dlg.setWindowTitle("Close aborted")
@@ -1039,7 +1043,7 @@ class MainApp(QMainWindow):
 
     async def _ask_close_modified(self, parent, filepath):
         """Ask the user how to close a tab with unsaved changes; return save/discard/cancel."""
-        name = os.path.basename(filepath) if filepath else "[No Name]"
+        name = os.path.basename(filepath) if filepath else UNNAMED_NAME
         dlg = QMessageBox(parent)
         dlg.setIcon(QMessageBox.Icon.Warning)
         dlg.setWindowTitle("Unsaved changes")
@@ -1262,7 +1266,7 @@ class MainApp(QMainWindow):
         if window is None:
             return
         window.takeCentralWidget()  # release the pane from the window without deleting it
-        index = self.tabs.addTab(pane, "[No Name]")
+        index = self.tabs.addTab(pane, UNNAMED_NAME)
         window.deleteLater()
         grid = registry.get_grid_by_pane(pane)
         if grid is not None:
