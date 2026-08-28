@@ -778,12 +778,6 @@ class MainApp(QMainWindow):
         if self.text_display is not None:
             self.text_display.setFocus()
 
-    def _active_entry(self):
-        """Return the GridEntry backing the active tab, or None."""
-        if self.text_display is None:
-            return None
-        return registry.get_entry_by_pane(self.text_display.pane)
-
     @staticmethod
     def _window_title(filepath):
         """Build a window title: '{name} ({dir, ~-collapsed}) - Nysor' (or '[No Name] - Nysor')."""
@@ -1641,8 +1635,13 @@ class MainApp(QMainWindow):
         if await swarm.discover(asyncio.get_running_loop(), filename):
             await self._show_open_elsewhere(filename)
             return
-        entry = self._active_entry()
-        reuse = entry is not None and not entry.filepath and not entry.pane.modified
+
+        if self.text_display is None:
+            reuse = False
+        else:
+            entry = registry.get_entry_by_pane(self.text_display.pane)
+            reuse = not entry.filepath and not entry.pane.modified
+
         cmd = "edit" if reuse else "tabedit"
         await self.nvi.call("nvim_cmd", {"cmd": cmd, "args": [filename]}, {"output": False})
 
