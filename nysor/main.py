@@ -44,7 +44,7 @@ from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications, registry
 from nysor.text_display import TextDisplay, MIN_COLS_ROWS
-from nysor.utils import call_async
+from nysor.utils import call_async, AsyncQMessageBox
 
 logger = logging.getLogger(__name__)
 
@@ -879,9 +879,9 @@ class MainApp(QMainWindow):
     def set_editor_mode(self, mode_info):
         """Set the cursor mode for the ACTIVE editor, and remember it for new tabs.
 
-        The mode (e.g. insert -> a bar cursor) belongs to Neovim's current window; applying it to
-        every display would change the cursor in the inactive/frozen editors too. New tabs pick up
-        the remembered mode on build; a window picks it up again when it becomes active.
+        The mode setting (e.g. insert -> a bar cursor) belongs to Neovim's current
+        window. New tabs pick up the remembered mode on build; a window picks it up
+        again when it becomes active.
         """
         self._editor_mode = mode_info
         if self.text_display is not None:
@@ -1038,7 +1038,7 @@ class MainApp(QMainWindow):
     async def _ask_close_modified(self, parent, filepath):
         """Ask the user how to close a tab with unsaved changes; return save/discard/cancel."""
         name = os.path.basename(filepath) if filepath else UNNAMED_NAME
-        dlg = QMessageBox(parent)
+        dlg = AsyncQMessageBox(parent)
         dlg.setIcon(QMessageBox.Icon.Warning)
         dlg.setWindowTitle("Unsaved changes")
         dlg.setText(f"{name!r} has unsaved changes.")
@@ -1047,11 +1047,7 @@ class MainApp(QMainWindow):
         discard_btn = dlg.addButton(QMessageBox.StandardButton.Discard)
         dlg.addButton(QMessageBox.StandardButton.Cancel)
         dlg.setDefaultButton(save_btn)
-
-        answered = asyncio.Event()
-        dlg.finished.connect(lambda _result: answered.set())
-        dlg.open()  # non-blocking, so the async loop keeps running while the user decides
-        await answered.wait()
+        await dlg.wait()
 
         clicked = dlg.clickedButton()
         if clicked is save_btn:
@@ -1079,7 +1075,7 @@ class MainApp(QMainWindow):
     async def _ask_reload(self, parent, filepath):
         """Ask the user to confirm discarding unsaved changes; return True to proceed."""
         name = os.path.basename(filepath)
-        dlg = QMessageBox(parent)
+        dlg = AsyncQMessageBox(parent)
         dlg.setIcon(QMessageBox.Icon.Warning)
         dlg.setWindowTitle("Reload")
         dlg.setText(f"{name!r} has unsaved changes.")
@@ -1087,11 +1083,7 @@ class MainApp(QMainWindow):
         discard_btn = dlg.addButton(QMessageBox.StandardButton.Discard)
         cancel_btn = dlg.addButton(QMessageBox.StandardButton.Cancel)
         dlg.setDefaultButton(cancel_btn)  # default to the safe choice for a destructive action
-
-        answered = asyncio.Event()
-        dlg.finished.connect(lambda _result: answered.set())
-        dlg.open()  # non-blocking, so the async loop keeps running while the user decides
-        await answered.wait()
+        await dlg.wait()
 
         return dlg.clickedButton() is discard_btn
 
@@ -1532,17 +1524,12 @@ class MainApp(QMainWindow):
         logger.debug("Start shutdown, asking Neovim to quit")
         error = await self.nvi.quit()
         if error:
-            dlg = QMessageBox(self)
+            dlg = AsyncQMessageBox(self)
             dlg.setIcon(QMessageBox.Icon.Warning)
             dlg.setWindowTitle("Neovim Error")
             dlg.setText(error)
             dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
-
-            # wait asyncly for the dialog to be closed
-            closed = asyncio.Event()
-            dlg.finished.connect(lambda _result: closed.set())
-            dlg.open()
-            await closed.wait()
+            await dlg.wait()
 
             self._closing = 0  # reset
             return
@@ -1648,7 +1635,7 @@ class MainApp(QMainWindow):
     async def _show_open_elsewhere(self, filepath):
         """Tell the user the file is already open in another Nysor instance (non-blocking)."""
         name = os.path.basename(filepath)
-        dlg = QMessageBox(self)
+        dlg = AsyncQMessageBox(self)
         dlg.setIcon(QMessageBox.Icon.Information)
         dlg.setWindowTitle("Already open")
         dlg.setText(f"{name!r} is already open in another Nysor instance.")
@@ -1656,7 +1643,7 @@ class MainApp(QMainWindow):
         answered = asyncio.Event()
         dlg.finished.connect(lambda _result: answered.set())
         dlg.open()
-        await answered.wait()
+        await dlg.wait()
 
 
 def start():
