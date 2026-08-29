@@ -217,12 +217,13 @@ class MainMenu:
     SCOPE_MAIN = 1
     SCOPE_DETACHED = 2
     SCOPE_TAB = 3
+    SCOPE_OUTSIDE_TAB = 4
 
     # (label, handler-suffix, scope); (None, None, None) is a separator
     MENU = {
         "&File": [
-            ("&New", "file__new", {SCOPE_MAIN}),
-            ("&Open", "file__open", {SCOPE_MAIN}),
+            ("&New", "file__new", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
+            ("&Open", "file__open", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
             (None, None, None),
             ("&Save", "file__save", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
             ("S&ave as...", "file__save_as", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
@@ -599,7 +600,8 @@ class EditorTabBar(QTabBar):
         inside_window = self.window().frameGeometry().contains(pos)
 
         if not inside_window:
-            self._detach(pane)
+            entry = registry.get_entry_by_pane(pane)
+            self._detach(entry)
 
 
 class DetachedWindow(QMainWindow):
@@ -695,7 +697,7 @@ class MainApp(QMainWindow):
         # claimed by the first window. 'text_display' tracks the active editor display.
         self.tabs = QTabWidget()
         # custom bar: drag to reorder, or pull a tab off the strip to detach it into its own window
-        self.tabs.setTabBar(EditorTabBar(self.tabs.widget, self._detach_pane))
+        self.tabs.setTabBar(EditorTabBar(self.tabs.widget, self.detach_tab))
         # show each file name in full (no eliding, so nothing is squeezed); tabs take their natural
         # width, and when they overflow the bar shows scroll buttons instead of shrinking them. The
         # full path is in each tab's tooltip (see _refresh_tab_label).
@@ -1214,10 +1216,6 @@ class MainApp(QMainWindow):
         if pane is None or self.text_display is None:
             return  # no current tab / no active display: only while tearing down, nothing to do
         self.activate_pane(pane)
-
-    def _detach_pane(self, pane):
-        """Detach a pane pulled off the tab bar (see EditorTabBar)."""
-        self.detach_tab(registry.get_entry_by_pane(pane))
 
     def detach_tab(self, entry):
         """Pull a tab's editor pane out into its own OS window (see DetachedWindow)."""
