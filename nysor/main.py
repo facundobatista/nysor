@@ -1329,7 +1329,10 @@ class MainApp(QMainWindow):
         self.nvi.future_request("nvim_ui_try_resize_grid", grid, cols, rows)
 
     def _path_discover_cb(self, path):
-        """Swarm callback: if we show `path`, reveal its tab/window; report whether we have it."""
+        """Swarm callback: if we have the `path`, reveal its tab/window.
+
+        Return True if we have it.
+        """
         return self._reveal_path(path)
 
     def _reveal_path(self, path):
@@ -1497,8 +1500,8 @@ class MainApp(QMainWindow):
         for entry in registry.get_all_entries():  # snapshot: closing mutates the registry
             if entry.win_id is None or not entry.pane.modified:
                 continue
-            choice = await self._ask_close_modified(
-                self._detached.get(entry.pane, self), entry.filepath)
+            pane_window_parent = self._detached.get(entry.pane, self)
+            choice = await self._ask_close_modified(pane_window_parent, entry.filepath)
             if choice == "cancel":
                 self._closing = 0  # abort: already-closed editors stay closed, the rest stay open
                 return
