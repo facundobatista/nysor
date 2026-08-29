@@ -240,7 +240,7 @@ class NvimNotifications:
         """
         # under multigrid only the current tabpage's window renders, so a grid we are asked to
         # render/build IS the active one; mark it BEFORE build_editor_tab, whose font setup
-        # relayouts the window and would otherwise resize the previously-active (now hidden) tab
+        # re-layouts the window and would otherwise resize the previously-active (now hidden) tab
         self.main_window.mark_active_grid(grid_id)
         entry = registry.get_entry_by_grid(grid_id)
         if entry is None:
