@@ -174,12 +174,12 @@ class BaseDisplay(QWidget):
 
         action = "press"
         modifier = self._get_button_modifiers(event)
-        grid = self._grid_id()
+        grid_id = registry.get_grid_by_pane(self.pane)
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
         self.main_window.nvi.future_request(
-            "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
         )
 
     def mouseReleaseEvent(self, event: QMouseEvent):
@@ -200,12 +200,12 @@ class BaseDisplay(QWidget):
 
         action = "release"
         modifier = self._get_button_modifiers(event)
-        grid = self._grid_id()
+        grid_id = registry.get_grid_by_pane(self.pane)
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
         self.main_window.nvi.future_request(
-            "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
         )
 
         # this will make Neovim to yank selection to the "X11 main selection"
@@ -224,12 +224,12 @@ class BaseDisplay(QWidget):
         button_name = "left"
         action = "drag"
         modifier = self._get_button_modifiers(event)
-        grid = self._grid_id()
+        grid_id = registry.get_grid_by_pane(self.pane)
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
         self.main_window.nvi.future_request(
-            "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
         )
 
     def wheelEvent(self, event: QWheelEvent):
@@ -249,32 +249,21 @@ class BaseDisplay(QWidget):
         dx, dy = qpoint.x(), qpoint.y()
         trigger_limit = 10
         row, col = 0, 0  # seems to be ignored
-        grid = self._grid_id()
+        grid_id = registry.get_grid_by_pane(self.pane)
 
         if abs(dx) > trigger_limit:
             action = "right" if dx > 0 else "left"
             modifier = self._get_button_modifiers(event)
             self.main_window.nvi.future_request(
-                "nvim_input_mouse", button_name, action, modifier, grid, row, col
+                "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
             )
 
         if abs(dy) > trigger_limit:
             action = "up" if dy > 0 else "down"
             modifier = self._get_button_modifiers(event)
             self.main_window.nvi.future_request(
-                "nvim_input_mouse", button_name, action, modifier, grid, row, col
+                "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
             )
-
-    def _grid_id(self):
-        """Return this display's Neovim grid id, looked up in the registry.
-
-        Only interactive editor displays (which have a `pane`) send mouse input, and by the time
-        one can be clicked its window is registered. A missing mapping is thus a broken invariant,
-        not a normal case.
-        """
-        grid = registry.get_grid_by_pane(self.pane)
-        assert grid is not None, "mouse event on a display whose pane is not in the grid registry"
-        return grid
 
     def _get_grid_cell(self, x: int, y: int):
         """Return grid's row and column from pixels x and y."""
