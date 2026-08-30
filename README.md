@@ -72,6 +72,7 @@ These are the items lousely grouped to get there:
 - allow double-level logging (user selected to terminal, debug to a file if configured)
 - FIXME.94 allow logging system to use `logger.trace`
 - Improve swarm discover latency
+- font size with ctrl-+/-
 - docs/2026-08-24-optimizations.md
 
 

@@ -1641,9 +1641,6 @@ class MainApp(QMainWindow):
         dlg.setWindowTitle("Already open")
         dlg.setText(f"{name!r} is already open in another Nysor instance.")
         dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
-        answered = asyncio.Event()
-        dlg.finished.connect(lambda _result: answered.set())
-        dlg.open()
         await dlg.wait()
 
 
