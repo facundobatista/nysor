@@ -324,6 +324,9 @@ class MainMenu:
             self.actions["file__reload"].setEnabled(modified and named)
         if "file__open" in self.actions:
             self.actions["file__open"].setEnabled(not modified)
+        if "window__detach" in self.actions:
+            # detaching the main window's only tab would leave its strip empty
+            self.actions["window__detach"].setEnabled(self._app.tabs.count() > 1)
 
     def _log_action(func):
         """Log the action indicate by the user."""
@@ -993,6 +996,18 @@ class MainApp(QMainWindow):
         dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
         dlg.open()  # non-blocking; just informational
 
+    def _show_last_tab_blocked(self):
+        """Tell the user we kept the main window's last tab open while windows are detached."""
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Icon.Information)
+        dlg.setWindowTitle("Cannot close")
+        dlg.setText(
+            "This is the main window's last tab, and other windows are still detached.\n"
+            "Re-attach or close them first."
+        )
+        dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dlg.open()  # non-blocking; just informational
+
     def close_pane(self, pane):
         """Close a specific editor pane's buffer, prompting on unsaved changes (see close_tab).
 
@@ -1014,6 +1029,11 @@ class MainApp(QMainWindow):
             return
         if entry is None or entry.win_id is None:
             logger.warning("close_tab with no known Neovim window for the tab")
+            return
+        if self.tabs.count() <= 1 and entry.pane not in self._detached:
+            # this is the main window's last tab, but windows are still detached elsewhere:
+            # closing it would leave the main window with an empty strip
+            self._show_last_tab_blocked()
             return
 
         if entry.pane.modified:
@@ -1220,6 +1240,10 @@ class MainApp(QMainWindow):
     def detach_tab(self, entry):
         """Pull a tab's editor pane out into its own OS window (see DetachedWindow)."""
         if entry is None:
+            return
+        if self.tabs.count() <= 1:
+            # detaching always empties one tab out of the main window's strip; with only one tab
+            # left that empties it entirely, regardless of how many other windows are detached
             return
         pane = entry.pane
         if pane in self._detached:
@@ -1537,7 +1561,17 @@ class MainApp(QMainWindow):
 
         self._closing = 2  # allows final close
         logger.debug("Start shutdown, done")
+        self._close_detached_windows()
         self.close()
+
+    def _close_detached_windows(self):
+        """Close every detached window.
+
+        They are independent top-level windows, not children of the main one, so Qt does not
+        close them along with it on its own.
+        """
+        for window in list(self._detached.values()):
+            window.close()
 
     def _quit_callback(self):
         """Close the GUI because of nvim interface request."""
@@ -1545,6 +1579,7 @@ class MainApp(QMainWindow):
             # only if it was not initiated internally
             logger.debug("Shutdown requested by nvim interface")
             self._closing = 2
+            self._close_detached_windows()
             self.close()
 
     def is_closing(self):
