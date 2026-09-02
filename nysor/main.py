@@ -87,6 +87,9 @@ SPECIAL_STDIN_PATH = "-"
 # what we show as a "name" if the editor still has no name ;)
 UNNAMED_NAME = "[No Name]"
 
+# the character that prefixes titles to indicate the buffer is modified
+MODIFIED_INDICATOR = "●"
+
 
 def get_nysor_version():
     """Return the Nysor version, from the installed metadata, or fallback to git."""
@@ -784,18 +787,20 @@ class MainApp(QMainWindow):
             self.text_display.setFocus()
 
     @staticmethod
-    def _window_title(filepath):
+    def _window_title(filepath, modified=False):
         """Build a window title: '{name} ({dir, ~-collapsed}) - Nysor' (or '[No Name] - Nysor')."""
         if not filepath:
-            return f"{UNNAMED_NAME} - Nysor"
-        name = os.path.basename(filepath)
-        basedir = os.path.dirname(filepath)
-        home = os.path.expanduser("~")
-        if basedir == home:
-            basedir = "~"
-        elif basedir.startswith(home + os.sep):
-            basedir = "~" + basedir[len(home):]
-        return f"{name} ({basedir}) - Nysor"
+            title = f"{UNNAMED_NAME} - Nysor"
+        else:
+            name = os.path.basename(filepath)
+            basedir = os.path.dirname(filepath)
+            home = os.path.expanduser("~")
+            if basedir == home:
+                basedir = "~"
+            elif basedir.startswith(home + os.sep):
+                basedir = "~" + basedir[len(home):]
+            title = f"{name} ({basedir}) - Nysor"
+        return f"{MODIFIED_INDICATOR} {title}" if modified else title
 
     def _refresh_main_title(self):
         """Set the main window title to its CURRENT tab's file (full info; see _window_title).
@@ -807,7 +812,8 @@ class MainApp(QMainWindow):
         grid = registry.get_grid_by_pane(pane) if pane is not None else None
         entry = registry.get_entry_by_grid(grid)
         path = entry.filepath if entry is not None else None
-        self.setWindowTitle(self._window_title(path))
+        modified = entry is not None and entry.pane.modified
+        self.setWindowTitle(self._window_title(path, modified))
 
     def _refresh_tab_label(self, grid_id):
         """Rebuild a window grid's label (tab text or detached-window title) from its filepath."""
@@ -817,13 +823,13 @@ class MainApp(QMainWindow):
             return
         window = self._detached.get(entry.pane)
         if window is not None:
-            window.setWindowTitle(self._window_title(entry.filepath))
+            window.setWindowTitle(self._window_title(entry.filepath, entry.pane.modified))
             return
         # tab text stays short (basename + modified marker); the tab bar elides long names and the
         # tooltip carries the full path
         name = os.path.basename(entry.filepath) if entry.filepath else UNNAMED_NAME
         if entry.pane.modified:
-            name = f"● {name}"
+            name = f"{MODIFIED_INDICATOR} {name}"
         index = self.tabs.indexOf(entry.pane)
         if index != -1:
             self.tabs.setTabText(index, name)
