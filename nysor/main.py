@@ -996,18 +996,6 @@ class MainApp(QMainWindow):
         dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
         dlg.open()  # non-blocking; just informational
 
-    def _show_last_tab_blocked(self):
-        """Tell the user we kept the main window's last tab open while windows are detached."""
-        dlg = QMessageBox(self)
-        dlg.setIcon(QMessageBox.Icon.Information)
-        dlg.setWindowTitle("Cannot close")
-        dlg.setText(
-            "This is the main window's last tab, and other windows are still detached.\n"
-            "Re-attach or close them first."
-        )
-        dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
-        dlg.open()  # non-blocking; just informational
-
     def close_pane(self, pane):
         """Close a specific editor pane's buffer, prompting on unsaved changes (see close_tab).
 
@@ -1033,7 +1021,15 @@ class MainApp(QMainWindow):
         if self.tabs.count() <= 1 and entry.pane not in self._detached:
             # this is the main window's last tab, but windows are still detached elsewhere:
             # closing it would leave the main window with an empty strip
-            self._show_last_tab_blocked()
+            dlg = QMessageBox(self)
+            dlg.setIcon(QMessageBox.Icon.Information)
+            dlg.setWindowTitle("Cannot close")
+            dlg.setText(
+                "This is the main window's last tab, and other windows are still detached.\n"
+                "Re-attach or close them first."
+            )
+            dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            dlg.open()  # non-blocking; just informational
             return
 
         if entry.pane.modified:
