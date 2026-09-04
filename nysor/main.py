@@ -1129,15 +1129,10 @@ class MainApp(QMainWindow):
 
     def _show_new_open_menu(self, global_pos):
         """Show a New/Open context menu (the empty part of the tab-bar row was right-clicked)."""
-        menu = QMenu(self)
-        new_act = menu.addAction("New")
-        open_act = menu.addAction("Open...")
-        chosen = menu.exec(global_pos)
-
-        if chosen is new_act:
-            self.new_file()
-        elif chosen is open_act:
-            self.open_file_dialog()
+        popup = MainMenu(
+            self, self, MainMenu.SCOPE_OUTSIDE_TAB,
+            lambda: registry.get(pane=self.tabs.currentWidget()))
+        popup.build_popup().exec(global_pos)
 
     def _show_tab_menu(self, pos):
         """Context menu: per-tab File actions on a tab, New/Open on the empty strip area."""
