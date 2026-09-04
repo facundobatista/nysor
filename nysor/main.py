@@ -1548,12 +1548,11 @@ class MainApp(QMainWindow):
                 # unsaved changes are simply dropped, the file on disk is left untouched)
                 await self.nvi.call(
                     "nvim_call_function", "win_execute", [entry.win_id, "setlocal nomodified"])
-            # close this editor's window now that its buffer is clean; the last remaining window
-            # cannot be closed this way (E444) -> leave it for the qall below
-            try:
+            # close this editor's window now that its buffer is clean, UNLESS it is the only one
+            # left: Neovim refuses to close the sole remaining window (E444), so leave that one
+            # for 'qall' below to take down instead of provoking (and swallowing) the error
+            if len(registry.get_all_entries()) > 1:
                 await self.nvi.call("nvim_win_close", entry.win_id, False)
-            except NeovimError:
-                pass
 
         # nothing modified is left; quit for real (this closes any remaining unmodified windows)
         logger.debug("Start shutdown, asking Neovim to quit")
