@@ -338,6 +338,24 @@ class MainMenu:
             return func(self)
         return _f
 
+    def _activate_target(func):
+        """Make the target editor Neovim's current window before running the action.
+
+        For SCOPE_MAIN/SCOPE_DETACHED the target is already the active editor, so this is a no-op
+        (activate_pane already guards on "already active"). For SCOPE_TAB it matters: acting on a
+        right-clicked BACKGROUND tab must bring it live first (both so the action itself runs
+        against Neovim's current window -- some commands, e.g. ':edit!', are unreliable against a
+        non-current one via win_execute -- and so the tab is the one left active afterwards, per
+        the same rule a plain tab click follows). Close is the one action that skips this (see its
+        own handler).
+        """
+        def _f(self):
+            entry = self._target()
+            if entry is not None:
+                self._app.activate_pane(entry.pane)
+            return func(self)
+        return _f
+
     @_log_action
     def _on__file__new(self):
         """Open a new empty tab."""
@@ -349,26 +367,31 @@ class MainMenu:
         self._app.open_file_dialog()
 
     @_log_action
+    @_activate_target
     def _on__file__save(self):
         """Save the target editor, asking for a name if it does not have one yet."""
         self._app.save_entry(self._target())
 
     @_log_action
+    @_activate_target
     def _on__file__save_as(self):
         """Save the target editor to a new file."""
         self._app.save_entry_as(self._target())
 
     @_log_action
+    @_activate_target
     def _on__file__reload(self):
         """Revert the target editor to the saved file, dropping unsaved changes (asks first)."""
         call_async(self._app.reload, self._target())
 
     @_log_action
+    @_activate_target
     def _on__window__detach(self):
         """Pull the target tab out into its own detached window."""
         self._app.detach_tab(self._target())
 
     @_log_action
+    @_activate_target
     def _on__window__reattach(self):
         """Move the target (detached) editor back into the main window as a tab."""
         self._app.reattach_pane(self._target())
