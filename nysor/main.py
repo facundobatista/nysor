@@ -787,15 +787,17 @@ class MainApp(QMainWindow):
 
         self.text_display.setFocus()
 
-    def _sync_menu_state(self):
-        """Refresh every window's menu enable-state to match its editor.
+    def _refresh_menu_for(self, pane):
+        """Refresh whichever menu bar (main or detached) currently targets this pane, if any.
 
-        The main bar follows its current tab; each detached bar follows its own pane (frozen while
-        unfocused, so re-applying it is a no-op for the inactive ones) -- never the global active.
+        Only that one bar's target could have changed -- the main bar follows its current tab,
+        each detached bar follows its own (fixed) pane -- so there is no need to touch the rest.
         """
-        self._menu.apply_enable_state()
-        for window in self._detached.values():
+        window = self._detached.get(pane)
+        if window is not None:
             window._menu.apply_enable_state()
+        elif pane is self.tabs.currentWidget():
+            self._menu.apply_enable_state()
 
     def focus_active_editor(self):
         """Give keyboard focus back to the active editor (the one Neovim currently has current).
@@ -882,11 +884,10 @@ class MainApp(QMainWindow):
             self.nvi.future_request("nvim_win_close", dup.win_id, False)
 
     def set_tab_modified(self, entry, modified):
-        """Set a window grid's modified state (label marker; menu if it is the active tab)."""
+        """Set a window grid's modified state (label marker; menu if it is a shown tab)."""
         entry.pane.modified = modified
         self._refresh_tab_label(entry)
-        if entry.pane.text_display is self.text_display:
-            self._sync_menu_state()
+        self._refresh_menu_for(entry.pane)
 
     def _editor_displays(self):
         """Return every editor display, whether held in a tab or in a detached window."""
@@ -1218,7 +1219,10 @@ class MainApp(QMainWindow):
             if self.tabs.currentIndex() != index:  # not an error: may already be current
                 self.tabs.setCurrentIndex(index)
         pane.text_display.setFocus()
-        self._sync_menu_state()  # the file menu follows the newly active editor
+        # the main bar's target is its current tab, unaffected by which window Neovim just made
+        # current; a detached bar's own target/state is untouched by activation too -- only the
+        # main bar could possibly need refreshing (e.g. a just-selected tab's modified state)
+        self._menu.apply_enable_state()
         # pin its grid to its current on-screen size (a freshly shown/activated window may not emit
         # a resizeEvent, e.g. the very first window or an unchanged geometry on tab switch)
         self.resize_editor_grid(pane.text_display)
@@ -1461,7 +1465,7 @@ class MainApp(QMainWindow):
             })
         """
         await self.nvi.call("nvim_exec_lua", _code, [])
-        self._sync_menu_state()  # initial menu state (no active tab modified yet)
+        self._menu.apply_enable_state()  # initial menu state (no active tab modified yet)
 
         # if a source is indicated, open it, differentiating if it's a file or standard input
         if paths_to_open == SPECIAL_STDIN_PATH:
