@@ -496,8 +496,7 @@ class EditorPane(QWidget):
 
         # get the lengths of the lines currently shown, for THIS pane's own buffer -- getbufline(0)
         # is the *alternate* buffer, not ours, so with more than one buffer it read the wrong one
-        grid = registry.get_grid_by_pane(self)
-        entry = registry.get_entry_by_grid(grid)
+        entry = registry.get(pane=self)
         buf = entry.bufnr if entry is not None else None
         if buf is None:
             return  # we don't know this window's buffer yet; leave the horizontal scroll bar as is
@@ -606,8 +605,7 @@ class EditorTabBar(QTabBar):
         inside_window = self.window().frameGeometry().contains(pos)
 
         if not inside_window:
-            entry = registry.get_entry_by_pane(pane)
-            self._detach(entry)
+            self._detach(registry.require(pane=pane))
 
 
 class DetachedWindow(QMainWindow):
@@ -627,7 +625,7 @@ class DetachedWindow(QMainWindow):
         self._pane = pane
         # a detached window's menu bar (host=self), acting on its OWN pane (not the active editor)
         self._menu = MainMenu(
-            app, self, MainMenu.SCOPE_DETACHED, lambda: registry.get_entry_by_pane(self._pane))
+            app, self, MainMenu.SCOPE_DETACHED, lambda: registry.require(pane=self._pane))
         self._menu.attach_bar()
         self.setCentralWidget(pane)
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
@@ -720,7 +718,7 @@ class MainApp(QMainWindow):
         # be created after we have tabs so the menu options can be enabled/disabled)
         self._menu = MainMenu(
             self, self, MainMenu.SCOPE_MAIN,
-            lambda: registry.get_entry_by_pane(self.tabs.currentWidget()))
+            lambda: registry.get(pane=self.tabs.currentWidget()))
         self._menu.attach_bar()
 
         # switching a tab from the GUI must move Neovim (see _on_tab_changed)
@@ -808,19 +806,13 @@ class MainApp(QMainWindow):
         It follows the shown tab, not the globally-active editor: while you work in a detached
         window, the main window keeps showing (and titling) its own current tab.
         """
-        pane = self.tabs.currentWidget()
-        grid = registry.get_grid_by_pane(pane) if pane is not None else None
-        entry = registry.get_entry_by_grid(grid)
+        entry = registry.get(pane=self.tabs.currentWidget())
         path = entry.filepath if entry is not None else None
         modified = entry is not None and entry.pane.modified
         self.setWindowTitle(self._window_title(path, modified))
 
-    def _refresh_tab_label(self, grid_id):
+    def _refresh_tab_label(self, entry):
         """Rebuild a window grid's label (tab text or detached-window title) from its filepath."""
-        entry = registry.get_entry_by_grid(grid_id)
-        if entry is None:
-            logger.warning("_refresh_tab_label for a grid with no entry: {}", grid_id)
-            return
         window = self._detached.get(entry.pane)
         if window is not None:
             window.setWindowTitle(self._window_title(entry.filepath, entry.pane.modified))
@@ -836,40 +828,35 @@ class MainApp(QMainWindow):
             self.tabs.setTabToolTip(index, entry.filepath or UNNAMED_NAME)
         self._refresh_main_title()  # the current tab's filepath may have changed
 
-    def refresh_tab(self, grid_id):
+    def refresh_tab(self, entry):
         """Update a window grid's tab after its buffer/filepath changed, enforcing one-per-buffer.
 
         One-buffer-one-tab (the in-process analogue of the swarm's cross-process path check): if
         another grid already owns this buffer, collapse this duplicate window into it -- switch to
         the existing tab and close the redundant Neovim window.
         """
-        self._refresh_tab_label(grid_id)
-        entry = registry.get_entry_by_grid(grid_id)
-        if entry is None or entry.bufnr is None:
+        self._refresh_tab_label(entry)
+        if entry.bufnr is None:
             return
-        owner = registry.get_grid_by_buffer(entry.bufnr)
-        if owner is not None and owner != grid_id:
-            self._collapse_duplicate(grid_id, owner)
+        owner = registry.get(bufnr=entry.bufnr)
+        if owner is not None and owner.grid_id != entry.grid_id:
+            self._collapse_duplicate(entry, owner)
 
-    def _collapse_duplicate(self, dup_grid, existing_grid):
+    def _collapse_duplicate(self, dup, existing):
         """Go to the tab that already owns the buffer and close the redundant window."""
-        dup = registry.get_entry_by_grid(dup_grid)
-        existing = registry.get_entry_by_grid(existing_grid)
         # mark the duplicate's pane as closing right away, so switching to the existing tab (which
         # may fire its own refresh) does not try to collapse in the other direction
         dup.pane.closed = True
-        if existing is not None and existing.win_id is not None:
+        if existing.win_id is not None:
             self.nvi.future_request("nvim_call_function", "win_gotoid", [existing.win_id])
         if dup.win_id is not None:
             self.nvi.future_request("nvim_win_close", dup.win_id, False)
+        # C? en este momento tenemos dos "entry" en el registry que apuntan al mismo bufnr, no? esta duplicación no es un problema? no deberíamos limpiarlo somehow?
 
-    def set_tab_modified(self, grid_id, modified):
+    def set_tab_modified(self, entry, modified):
         """Set a window grid's modified state (label marker; menu if it is the active tab)."""
-        entry = registry.get_entry_by_grid(grid_id)
-        if entry is None:
-            return
         entry.pane.modified = modified
-        self._refresh_tab_label(grid_id)
+        self._refresh_tab_label(entry)
         if entry.pane.text_display is self.text_display:
             self._sync_menu_state()
 
@@ -955,7 +942,7 @@ class MainApp(QMainWindow):
         pane = entry.pane
         bufnr = entry.bufnr
         # the grid was already forgotten, so another owner means the buffer lives in another tab
-        shown_elsewhere = bufnr is not None and registry.get_grid_by_buffer(bufnr) is not None
+        shown_elsewhere = bufnr is not None and registry.get(bufnr=bufnr) is not None
         if self._closing != 0 or bufnr is None or shown_elsewhere:
             self.destroy_editor_tab(pane)
             return
@@ -1008,7 +995,7 @@ class MainApp(QMainWindow):
         Used by a detached window's X button, which must target its own pane rather than whatever
         editor happens to be active.
         """
-        call_async(self.close_tab, registry.get_entry_by_pane(pane))
+        call_async(self.close_tab, registry.require(pane=pane))
 
     async def close_tab(self, entry):
         """Close a tab from the GUI, prompting if its buffer has unsaved changes.
@@ -1130,7 +1117,7 @@ class MainApp(QMainWindow):
         if index == -1:
             self._show_new_open_menu(tab_bar.mapToGlobal(pos))
             return
-        entry = registry.get_entry_by_pane(self.tabs.widget(index))
+        entry = registry.require(pane=self.tabs.widget(index))
         # a transient menu targeting THIS tab; the QAction handlers run via their triggered signal
         popup = MainMenu(self, self, MainMenu.SCOPE_TAB, lambda: entry)
         popup.build_popup().exec(tab_bar.mapToGlobal(pos))
@@ -1188,10 +1175,7 @@ class MainApp(QMainWindow):
         updated *before* bringing it forward, so the activation this triggers is recognized as
         already-active by activate_pane and does not bounce back to Neovim.
         """
-        entry = registry.get_entry_by_grid(grid_id)
-        if entry is None:
-            logger.warning("set_active_editor for a grid with no entry: {}", grid_id)
-            return
+        entry = registry.require(grid_id=grid_id)
         pane = entry.pane
         self.text_display = pane.text_display
         window = self._detached.get(pane)
@@ -1220,9 +1204,8 @@ class MainApp(QMainWindow):
         """
         if self.text_display is not None and pane is self.text_display.pane:
             return  # already active; nothing to send back to Neovim
-        grid = registry.get_grid_by_pane(pane)
-        entry = registry.get_entry_by_grid(grid)
-        if entry is None or entry.win_id is None:
+        entry = registry.require(pane=pane)
+        if entry.win_id is None:
             # a focusable pane should always have its Neovim window known by now
             logger.warning("focused a pane with no known Neovim window")
             return
@@ -1261,7 +1244,7 @@ class MainApp(QMainWindow):
         window = DetachedWindow(self, pane)  # setCentralWidget reparents the pane into it
         self._detached[pane] = window
         window.resize(self.size())  # roughly the main window size, so the grid is not clipped
-        self._refresh_tab_label(entry.grid_id)  # now routes to the detached window's title
+        self._refresh_tab_label(entry)  # now routes to the detached window's title
         window.show()
         window.raise_()
         window.activateWindow()  # focusing it activates the pane (via changeEvent -> win_gotoid)
@@ -1278,9 +1261,7 @@ class MainApp(QMainWindow):
         window.takeCentralWidget()  # release the pane from the window without deleting it
         index = self.tabs.addTab(pane, UNNAMED_NAME)
         window.deleteLater()
-        grid = registry.get_grid_by_pane(pane)
-        if grid is not None:
-            self._refresh_tab_label(grid)  # restore the proper tab label and modified marker
+        self._refresh_tab_label(entry)  # restore the proper tab label and modified marker
         self.tabs.setCurrentIndex(index)  # bring it to front (activates it via _on_tab_changed)
 
     def resizeEvent(self, event):
@@ -1343,8 +1324,8 @@ class MainApp(QMainWindow):
         """
         if display.pane is None or display.font_size is None:
             return
-        grid = registry.get_grid_by_pane(display.pane)
-        if grid is None or grid != self._active_grid:
+        entry = registry.get(pane=display.pane)
+        if entry is None or entry.grid_id != self._active_grid:
             return  # not the current tabpage's window -> would be rejected; re-pins on activation
         font_size = display.font_size
         cols = max(MIN_COLS_ROWS, int(display.width() / font_size.width))
@@ -1352,7 +1333,7 @@ class MainApp(QMainWindow):
         if (cols, rows) == display._last_grid_size:
             return  # nothing changed at grid granularity; skip the redundant resize
         display._last_grid_size = (cols, rows)
-        self.nvi.future_request("nvim_ui_try_resize_grid", grid, cols, rows)
+        self.nvi.future_request("nvim_ui_try_resize_grid", entry.grid_id, cols, rows)
 
     def _path_discover_cb(self, path):
         """Swarm callback: if we have the `path`, reveal its tab/window.
@@ -1367,7 +1348,7 @@ class MainApp(QMainWindow):
         The editor may be a tab in the main window (select it and raise the main window) or a
         detached window (raise that one).
         """
-        entry = registry.get_entry_by_path(path)
+        entry = registry.get(filepath=path)
         if entry is None:
             return False
         window = self._detached.get(entry.pane)
@@ -1664,7 +1645,7 @@ class MainApp(QMainWindow):
         if self.text_display is None:
             reuse = False
         else:
-            entry = registry.get_entry_by_pane(self.text_display.pane)
+            entry = registry.require(pane=self.text_display.pane)
             reuse = not entry.filepath and not entry.pane.modified
 
         cmd = "edit" if reuse else "tabedit"

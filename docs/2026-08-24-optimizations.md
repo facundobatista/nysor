@@ -64,9 +64,9 @@ when adjusting a pane that is not current.
 - **Seed the initial value** so there is no window of wrong state before the first `OptionSet`:
   piggyback on the existing `window_buffer` autocmd (also send `vim.wo.wrap`), or send a `window_wrap`
   once from the same buffer-enter autocmds. Preferred: extend `window_buffer` to carry wrap.
-- Add `_h__window_wrap(win_id, wrap)` in `NvimNotifications`: `grid = get_grid_by_win(win_id)`; if
-  known, `grids.set_wrap(grid, wrap)` (stash in a pending map if the grid is not known yet, mirroring
-  `_pending_buffers`).
+- Add `_h__window_wrap(win_id, wrap)` in `NvimNotifications`: `entry = registry.get(win_id=win_id)`;
+  if found, `registry.set_wrap(entry.grid_id, wrap)` (stash in a pending map if the grid is not known
+  yet, mirroring `_pending_buffers`).
 
 **Effect.** `adjust_viewport` reads `entry.wrap` — no RPC — and it is the correct per-window value.
 

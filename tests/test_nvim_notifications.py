@@ -295,21 +295,20 @@ class TestGridRegistry:
         entry = reg.add_grid(2, pane)
         assert entry.grid_id == 2
         assert entry.pane is pane
-        assert reg.get_entry_by_grid(2) is entry
-        assert reg.get_pane_by_grid(2) is pane
-        assert reg.get_grid_by_pane(pane) == 2
+        assert reg.get(grid_id=2) is entry
+        assert reg.get(pane=pane) is entry
         assert reg.has_grid(2)
 
     def test_set_win_direct_lookup(self):
-        """set_win indexes the window id so grid_of_win resolves it without iterating."""
+        """set_win indexes the window id so get(win_id=...) resolves it without iterating."""
         reg = GridRegistry()
         reg.add_grid(2, object())
         reg.add_grid(4, object())
         reg.set_win(2, 5)
         reg.set_win(4, 9)
-        assert reg.get_grid_by_win(5) == 2
-        assert reg.get_grid_by_win(9) == 4
-        assert reg.get_grid_by_win(123) is None
+        assert reg.get(win_id=5).grid_id == 2
+        assert reg.get(win_id=9).grid_id == 4
+        assert reg.get(win_id=123) is None
 
     def test_set_win_replaces_previous_id(self):
         """Updating a grid's window id drops the stale reverse lookup."""
@@ -317,17 +316,17 @@ class TestGridRegistry:
         reg.add_grid(2, object())
         reg.set_win(2, 5)
         reg.set_win(2, 8)
-        assert reg.get_grid_by_win(5) is None
-        assert reg.get_grid_by_win(8) == 2
+        assert reg.get(win_id=5) is None
+        assert reg.get(win_id=8).grid_id == 2
 
     def test_set_buffer_records_buffer_and_path(self):
         """set_buffer stores bufnr/filepath and indexes the owning grid by bufnr."""
         reg = GridRegistry()
         reg.add_grid(2, object())
         reg.set_buffer(2, 7, "/some/path")
-        assert reg.get_entry_by_grid(2).bufnr == 7
-        assert reg.get_entry_by_grid(2).filepath == "/some/path"
-        assert reg.get_grid_by_buffer(7) == 2
+        assert reg.get(grid_id=2).bufnr == 7
+        assert reg.get(grid_id=2).filepath == "/some/path"
+        assert reg.get(bufnr=7).grid_id == 2
 
     def test_set_buffer_keeps_first_owner(self):
         """A second grid showing the same buffer does not steal ownership of the bufnr index."""
@@ -336,7 +335,7 @@ class TestGridRegistry:
         reg.add_grid(4, object())
         reg.set_buffer(2, 7, "/p")
         reg.set_buffer(4, 7, "/p")
-        assert reg.get_grid_by_buffer(7) == 2
+        assert reg.get(bufnr=7).grid_id == 2
 
     def test_has_path(self):
         """has_path reports whether any window grid shows the given filepath."""
@@ -346,23 +345,43 @@ class TestGridRegistry:
         assert reg.has_path("/some/path")
         assert not reg.has_path("/other")
 
-    def test_get_entry_by_path(self):
-        """get_entry_by_path returns the entry showing the filepath, or None."""
+    def test_get_by_filepath(self):
+        """get(filepath=...) returns the entry showing the filepath, or None."""
         reg = GridRegistry()
         reg.add_grid(2, object())
         reg.add_grid(4, object())
         reg.set_buffer(4, 9, "/some/path")
-        assert reg.get_entry_by_path("/some/path").grid_id == 4
-        assert reg.get_entry_by_path("/nope") is None
+        assert reg.get(filepath="/some/path").grid_id == 4
+        assert reg.get(filepath="/nope") is None
 
-    def test_get_entry_by_pane(self):
-        """get_entry_by_pane returns the entry backed by the pane, or None for unknown/None."""
+    def test_get_by_pane(self):
+        """get(pane=...) returns the entry backed by the pane, or None for unknown/None."""
         reg = GridRegistry()
         pane = object()
         entry = reg.add_grid(2, pane)
-        assert reg.get_entry_by_pane(pane) is entry
-        assert reg.get_entry_by_pane(object()) is None
-        assert reg.get_entry_by_pane(None) is None
+        assert reg.get(pane=pane) is entry
+        assert reg.get(pane=object()) is None
+        assert reg.get(pane=None) is None
+
+    def test_get_requires_exactly_one_key(self):
+        """get() (and require()) refuse to be called with zero or several keys."""
+        reg = GridRegistry()
+        with pytest.raises(AssertionError):
+            reg.get()
+        with pytest.raises(AssertionError):
+            reg.get(grid_id=2, win_id=5)
+
+    def test_require_returns_the_entry_when_found(self):
+        """require() behaves like get() when the entry exists."""
+        reg = GridRegistry()
+        entry = reg.add_grid(2, object())
+        assert reg.require(grid_id=2) is entry
+
+    def test_require_asserts_when_missing(self):
+        """require() raises (instead of returning None) when nothing matches."""
+        reg = GridRegistry()
+        with pytest.raises(AssertionError):
+            reg.require(grid_id=2)
 
     def test_records_lists_all_windows(self):
         """records() returns every window grid record."""
@@ -387,7 +406,7 @@ class TestGridRegistry:
         reg.set_win(2, 5)
         reg.set_buffer(2, 7, "/p")
         reg.forget_grid(2)
-        assert reg.get_entry_by_grid(2) is None
-        assert reg.get_grid_by_win(5) is None
-        assert reg.get_grid_by_buffer(7) is None
-        assert reg.get_grid_by_pane(pane) is None
+        assert reg.get(grid_id=2) is None
+        assert reg.get(win_id=5) is None
+        assert reg.get(bufnr=7) is None
+        assert reg.get(pane=pane) is None

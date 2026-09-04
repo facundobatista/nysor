@@ -174,7 +174,9 @@ class BaseDisplay(QWidget):
 
         action = "press"
         modifier = self._get_button_modifiers(event)
-        grid_id = registry.get_grid_by_pane(self.pane)
+        # only interactive editor displays send mouse input, and by the time one can be clicked
+        # its window is registered -- a missing mapping would be a broken invariant
+        grid_id = registry.require(pane=self.pane).grid_id
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -200,7 +202,9 @@ class BaseDisplay(QWidget):
 
         action = "release"
         modifier = self._get_button_modifiers(event)
-        grid_id = registry.get_grid_by_pane(self.pane)
+        # only interactive editor displays send mouse input, and by the time one can be clicked
+        # its window is registered -- a missing mapping would be a broken invariant
+        grid_id = registry.require(pane=self.pane).grid_id
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -224,7 +228,9 @@ class BaseDisplay(QWidget):
         button_name = "left"
         action = "drag"
         modifier = self._get_button_modifiers(event)
-        grid_id = registry.get_grid_by_pane(self.pane)
+        # only interactive editor displays send mouse input, and by the time one can be clicked
+        # its window is registered -- a missing mapping would be a broken invariant
+        grid_id = registry.require(pane=self.pane).grid_id
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -249,7 +255,9 @@ class BaseDisplay(QWidget):
         dx, dy = qpoint.x(), qpoint.y()
         trigger_limit = 10
         row, col = 0, 0  # seems to be ignored
-        grid_id = registry.get_grid_by_pane(self.pane)
+        # only interactive editor displays send mouse input, and by the time one can be clicked
+        # its window is registered -- a missing mapping would be a broken invariant
+        grid_id = registry.require(pane=self.pane).grid_id
 
         if abs(dx) > trigger_limit:
             action = "right" if dx > 0 else "left"

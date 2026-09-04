@@ -15,6 +15,10 @@ from nysor.utils import call_async
 
 logger = logging.getLogger(__name__)
 
+# sentinel telling GridRegistry.get()/require() a keyword was not passed at all, distinct from
+# a key explicitly looked up as None (e.g. get(pane=None) is a valid, if useless, lookup)
+_UNSET = object()
+
 
 class DynamicCache:
     """A cache that is cleaned up when any of the section labels change."""
@@ -112,6 +116,7 @@ class GridRegistry:
 
     def has_grid(self, grid_id: int) -> bool:
         """Whether a window grid entry exists for this grid."""
+        # C? y este método quien lo usa?
         return grid_id in self._by_grid
 
     def set_win(self, grid_id: int, win_id: int) -> None:
@@ -152,45 +157,64 @@ class GridRegistry:
 
     # -- queries
 
-    def get_entry_by_grid(self, grid_id: int) -> GridEntry | None:
-        """Return the entry of a window grid, or None."""
-        return self._by_grid.get(grid_id)
+    def get(
+        self,
+        *,
+        grid_id=_UNSET,
+        win_id=_UNSET,
+        bufnr=_UNSET,
+        pane=_UNSET,
+        filepath=_UNSET
+    ) -> GridEntry | None:
+        """Look up the entry for exactly one key; return None if nothing matches.
 
-    def get_pane_by_grid(self, grid_id: int):
-        """Return the Qt pane of a window grid, or None."""
-        entry = self._by_grid.get(grid_id)
-        return entry.pane if entry is not None else None
+        Exactly one of grid_id/win_id/bufnr/pane/filepath must be given. Use this when a miss is
+        a normal outcome (a grid not built yet, a window/buffer/path not known here). When a miss
+        would mean a broken invariant, use require() instead.
+        """
+        given = [k for k in (grid_id, win_id, bufnr, pane, filepath) if k is not _UNSET]
+        assert len(given) == 1, "registry.get() takes exactly one key"
+        # C? me parece demasiado trabajo para cada llamada al .get(), cuando en realidad eso indicaría un error de programación; no haría la validación at all
+        if grid_id is not _UNSET:
+            return self._by_grid.get(grid_id)
+        if win_id is not _UNSET:
+            return self._by_grid.get(self._by_win.get(win_id))
+        if bufnr is not _UNSET:
+            return self._by_grid.get(self._by_buf.get(bufnr))
+        if pane is not _UNSET:
+            return self._by_grid.get(self._by_pane.get(pane))
+        # C? en los últimos tres casos, no seria mejor que cada diccionario guardara el entry, y no el grid_id?
+        for entry in self._by_grid.values():
+            if entry.filepath == filepath:
+                return entry
+        # C? no convendría poner un diccionario en vez de iterar por los valores?
+        return None
 
-    def get_grid_by_win(self, win_id: int) -> int | None:
-        """Return the grid showing the given Neovim window id, or None."""
-        return self._by_win.get(win_id)
-
-    def get_grid_by_buffer(self, bufnr: int) -> int | None:
-        """Return the grid that owns the given Neovim buffer, or None."""
-        return self._by_buf.get(bufnr)
-
-    def get_grid_by_pane(self, pane) -> int | None:
-        """Return the grid backed by the given Qt pane, or None."""
-        return self._by_pane.get(pane)
-
-    def get_entry_by_pane(self, pane) -> GridEntry | None:
-        """Return the entry backed by the given Qt pane, or None."""
-        return self.get_entry_by_grid(self.get_grid_by_pane(pane))
+    def require(
+        self,
+        *,
+        grid_id=_UNSET,
+        win_id=_UNSET,
+        bufnr=_UNSET,
+        pane=_UNSET,
+        filepath=_UNSET
+    ) -> GridEntry:
+        """Run the same lookup as get(), but assert the entry exists (a known invariant)."""
+        entry = self.get(grid_id=grid_id, win_id=win_id, bufnr=bufnr, pane=pane, filepath=filepath)
+        assert entry is not None, (
+            f"registry.require() found nothing for grid_id={grid_id!r} win_id={win_id!r} "
+            f"bufnr={bufnr!r} pane={pane!r} filepath={filepath!r}"
+        )
+        return entry
 
     def get_all_entries(self) -> list:
         """Return all window grid entries."""
         return list(self._by_grid.values())
 
-    def get_entry_by_path(self, filepath: str) -> GridEntry | None:
-        """Return the (first) window grid entry showing the given filepath, or None."""
-        for entry in self._by_grid.values():
-            if entry.filepath == filepath:
-                return entry
-        return None
-
     def has_path(self, filepath: str) -> bool:
         """Whether some window grid currently shows the given filepath."""
-        return self.get_entry_by_path(filepath) is not None
+        # C? y este método quien lo usa?
+        return self.get(filepath=filepath) is not None
 
 
 # global and unique registry
@@ -242,7 +266,7 @@ class NvimNotifications:
         # render/build IS the active one; mark it BEFORE build_editor_tab, whose font setup
         # re-layouts the window and would otherwise resize the previously-active (now hidden) tab
         self.main_window.mark_active_grid(grid_id)
-        entry = registry.get_entry_by_grid(grid_id)
+        entry = registry.get(grid_id=grid_id)
         if entry is None:
             display = self.main_window.build_editor_tab()
             entry = registry.add_grid(grid_id, display.pane)
@@ -309,10 +333,10 @@ class NvimNotifications:
 
     def _h__modified_changed(self, win_id: int, is_modified: bool):
         """Handle the notification when a window's buffer starts/stops having changes."""
-        grid = registry.get_grid_by_win(win_id)
-        # grid may legitimately be None when the change arrives for a window we don't know yet
-        if grid is not None:
-            self.main_window.set_tab_modified(grid, is_modified)
+        entry = registry.get(win_id=win_id)
+        # entry may legitimately be None when the change arrives for a window we don't know yet
+        if entry is not None:
+            self.main_window.set_tab_modified(entry, is_modified)
 
     def _h__window_buffer(self, win_id: int, bufnr: int, filepath: str):
         """Handle the notification about which buffer a window shows.
@@ -320,10 +344,10 @@ class NvimNotifications:
         Records the buffer/filepath and updates the tab. If the window's grid is not known yet
         (win_pos not received), we stash it and apply it when win_pos arrives.
         """
-        grid = registry.get_grid_by_win(win_id)
-        if grid is not None:
-            registry.set_buffer(grid, bufnr, filepath)
-            self.main_window.refresh_tab(grid)
+        entry = registry.get(win_id=win_id)
+        if entry is not None:
+            registry.set_buffer(entry.grid_id, bufnr, filepath)
+            self.main_window.refresh_tab(entry)
         else:
             self._pending_buffers[win_id] = (bufnr, filepath)
 
@@ -389,7 +413,7 @@ class NvimNotifications:
             kind = registry.get_kind_by_grid(grid_id)
             if kind == GridRegistry.GRID_WINDOW:
                 # a not-yet-created window keeps its size in _grid_sizes; _ensure_editor applies it
-                entry = registry.get_entry_by_grid(grid_id)
+                entry = registry.get(grid_id=grid_id)
                 if entry is not None:
                     entry.pane.text_display.resize_view((width, height))
             elif kind == GridRegistry.GRID_MESSAGE:
@@ -410,7 +434,7 @@ class NvimNotifications:
     def _n_redraw__grid_destroy(self, *args):
         """Drop grids that Neovim destroyed (their windows were closed)."""
         for (grid_id,) in args:
-            entry = registry.get_entry_by_grid(grid_id)
+            entry = registry.get(grid_id=grid_id)
             registry.forget_grid(grid_id)
             if entry is not None:
                 # let the GUI decide what to do with that window's buffer (close it, or, if it
@@ -436,7 +460,7 @@ class NvimNotifications:
             if win_id in self._pending_buffers:
                 bufnr, filepath = self._pending_buffers.pop(win_id)
                 registry.set_buffer(grid_id, bufnr, filepath)
-                self.main_window.refresh_tab(grid_id)
+                self.main_window.refresh_tab(registry.require(grid_id=grid_id))
         self._layout_statusline_strip()
 
     def _n_redraw__win_hide(self, *args):
@@ -542,6 +566,6 @@ class NvimNotifications:
         """Viewport info per window; routed to the owning pane (may carry several windows)."""
         # Note: can't find use to scroll_delta (maybe for smooth scrollbar?)
         for grid, _win, topline, botline, _curline, curcol, line_count, _scroll_delta in args:
-            pane = registry.get_pane_by_grid(grid)
-            if pane is not None:
-                call_async(pane.adjust_viewport, topline, botline, line_count, curcol)
+            entry = registry.get(grid_id=grid)
+            if entry is not None:
+                call_async(entry.pane.adjust_viewport, topline, botline, line_count, curcol)
