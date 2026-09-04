@@ -297,7 +297,6 @@ class TestGridRegistry:
         assert entry.pane is pane
         assert reg.get(grid_id=2) is entry
         assert reg.get(pane=pane) is entry
-        assert reg.has_grid(2)
 
     def test_set_win_direct_lookup(self):
         """set_win indexes the window id so get(win_id=...) resolves it without iterating."""
@@ -337,14 +336,6 @@ class TestGridRegistry:
         reg.set_buffer(4, 7, "/p")
         assert reg.get(bufnr=7).grid_id == 2
 
-    def test_has_path(self):
-        """has_path reports whether any window grid shows the given filepath."""
-        reg = GridRegistry()
-        reg.add_grid(2, object())
-        reg.set_buffer(2, 7, "/some/path")
-        assert reg.has_path("/some/path")
-        assert not reg.has_path("/other")
-
     def test_get_by_filepath(self):
         """get(filepath=...) returns the entry showing the filepath, or None."""
         reg = GridRegistry()
@@ -363,25 +354,17 @@ class TestGridRegistry:
         assert reg.get(pane=object()) is None
         assert reg.get(pane=None) is None
 
-    def test_get_requires_exactly_one_key(self):
-        """get() (and require()) refuse to be called with zero or several keys."""
-        reg = GridRegistry()
-        with pytest.raises(AssertionError):
-            reg.get()
-        with pytest.raises(AssertionError):
-            reg.get(grid_id=2, win_id=5)
-
-    def test_require_returns_the_entry_when_found(self):
-        """require() behaves like get() when the entry exists."""
+    def test_get_required_returns_the_entry_when_found(self):
+        """get_required() behaves like get() when the entry exists."""
         reg = GridRegistry()
         entry = reg.add_grid(2, object())
-        assert reg.require(grid_id=2) is entry
+        assert reg.get_required(grid_id=2) is entry
 
-    def test_require_asserts_when_missing(self):
-        """require() raises (instead of returning None) when nothing matches."""
+    def test_get_required_asserts_when_missing(self):
+        """get_required() raises (instead of returning None) when nothing matches."""
         reg = GridRegistry()
         with pytest.raises(AssertionError):
-            reg.require(grid_id=2)
+            reg.get_required(grid_id=2)
 
     def test_records_lists_all_windows(self):
         """records() returns every window grid record."""

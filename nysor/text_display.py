@@ -176,7 +176,7 @@ class BaseDisplay(QWidget):
         modifier = self._get_button_modifiers(event)
         # only interactive editor displays send mouse input, and by the time one can be clicked
         # its window is registered -- a missing mapping would be a broken invariant
-        grid_id = registry.require(pane=self.pane).grid_id
+        grid_id = registry.get_required(pane=self.pane).grid_id
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -204,7 +204,7 @@ class BaseDisplay(QWidget):
         modifier = self._get_button_modifiers(event)
         # only interactive editor displays send mouse input, and by the time one can be clicked
         # its window is registered -- a missing mapping would be a broken invariant
-        grid_id = registry.require(pane=self.pane).grid_id
+        grid_id = registry.get_required(pane=self.pane).grid_id
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -230,7 +230,7 @@ class BaseDisplay(QWidget):
         modifier = self._get_button_modifiers(event)
         # only interactive editor displays send mouse input, and by the time one can be clicked
         # its window is registered -- a missing mapping would be a broken invariant
-        grid_id = registry.require(pane=self.pane).grid_id
+        grid_id = registry.get_required(pane=self.pane).grid_id
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
@@ -257,7 +257,7 @@ class BaseDisplay(QWidget):
         row, col = 0, 0  # seems to be ignored
         # only interactive editor displays send mouse input, and by the time one can be clicked
         # its window is registered -- a missing mapping would be a broken invariant
-        grid_id = registry.require(pane=self.pane).grid_id
+        grid_id = registry.get_required(pane=self.pane).grid_id
 
         if abs(dx) > trigger_limit:
             action = "right" if dx > 0 else "left"

@@ -605,7 +605,7 @@ class EditorTabBar(QTabBar):
         inside_window = self.window().frameGeometry().contains(pos)
 
         if not inside_window:
-            self._detach(registry.require(pane=pane))
+            self._detach(registry.get_required(pane=pane))
 
 
 class DetachedWindow(QMainWindow):
@@ -625,7 +625,7 @@ class DetachedWindow(QMainWindow):
         self._pane = pane
         # a detached window's menu bar (host=self), acting on its OWN pane (not the active editor)
         self._menu = MainMenu(
-            app, self, MainMenu.SCOPE_DETACHED, lambda: registry.require(pane=self._pane))
+            app, self, MainMenu.SCOPE_DETACHED, lambda: registry.get_required(pane=self._pane))
         self._menu.attach_bar()
         self.setCentralWidget(pane)
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
@@ -843,7 +843,13 @@ class MainApp(QMainWindow):
             self._collapse_duplicate(entry, owner)
 
     def _collapse_duplicate(self, dup, existing):
-        """Go to the tab that already owns the buffer and close the redundant window."""
+        """Go to the tab that already owns the buffer and close the redundant window.
+
+        The dup's own registry entry is NOT removed here: both entries legitimately point at the
+        same bufnr until Neovim confirms the close (set_buffer's setdefault already keeps the
+        index pointing at `existing`); grid_destroy -> forget_grid cleans dup's entry up once
+        that arrives, no manual bookkeeping needed.
+        """
         # mark the duplicate's pane as closing right away, so switching to the existing tab (which
         # may fire its own refresh) does not try to collapse in the other direction
         dup.pane.closed = True
@@ -851,7 +857,6 @@ class MainApp(QMainWindow):
             self.nvi.future_request("nvim_call_function", "win_gotoid", [existing.win_id])
         if dup.win_id is not None:
             self.nvi.future_request("nvim_win_close", dup.win_id, False)
-        # C? en este momento tenemos dos "entry" en el registry que apuntan al mismo bufnr, no? esta duplicación no es un problema? no deberíamos limpiarlo somehow?
 
     def set_tab_modified(self, entry, modified):
         """Set a window grid's modified state (label marker; menu if it is the active tab)."""
@@ -995,7 +1000,7 @@ class MainApp(QMainWindow):
         Used by a detached window's X button, which must target its own pane rather than whatever
         editor happens to be active.
         """
-        call_async(self.close_tab, registry.require(pane=pane))
+        call_async(self.close_tab, registry.get_required(pane=pane))
 
     async def close_tab(self, entry):
         """Close a tab from the GUI, prompting if its buffer has unsaved changes.
@@ -1117,7 +1122,7 @@ class MainApp(QMainWindow):
         if index == -1:
             self._show_new_open_menu(tab_bar.mapToGlobal(pos))
             return
-        entry = registry.require(pane=self.tabs.widget(index))
+        entry = registry.get_required(pane=self.tabs.widget(index))
         # a transient menu targeting THIS tab; the QAction handlers run via their triggered signal
         popup = MainMenu(self, self, MainMenu.SCOPE_TAB, lambda: entry)
         popup.build_popup().exec(tab_bar.mapToGlobal(pos))
@@ -1175,7 +1180,7 @@ class MainApp(QMainWindow):
         updated *before* bringing it forward, so the activation this triggers is recognized as
         already-active by activate_pane and does not bounce back to Neovim.
         """
-        entry = registry.require(grid_id=grid_id)
+        entry = registry.get_required(grid_id=grid_id)
         pane = entry.pane
         self.text_display = pane.text_display
         window = self._detached.get(pane)
@@ -1204,7 +1209,7 @@ class MainApp(QMainWindow):
         """
         if self.text_display is not None and pane is self.text_display.pane:
             return  # already active; nothing to send back to Neovim
-        entry = registry.require(pane=pane)
+        entry = registry.get_required(pane=pane)
         if entry.win_id is None:
             # a focusable pane should always have its Neovim window known by now
             logger.warning("focused a pane with no known Neovim window")
@@ -1645,7 +1650,7 @@ class MainApp(QMainWindow):
         if self.text_display is None:
             reuse = False
         else:
-            entry = registry.require(pane=self.text_display.pane)
+            entry = registry.get_required(pane=self.text_display.pane)
             reuse = not entry.filepath and not entry.pane.modified
 
         cmd = "edit" if reuse else "tabedit"

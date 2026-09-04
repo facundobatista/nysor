@@ -15,7 +15,7 @@ from nysor.utils import call_async
 
 logger = logging.getLogger(__name__)
 
-# sentinel telling GridRegistry.get()/require() a keyword was not passed at all, distinct from
+# sentinel telling GridRegistry.get()/get_required() a keyword was not passed at all, distinct from
 # a key explicitly looked up as None (e.g. get(pane=None) is a valid, if useless, lookup)
 _UNSET = object()
 
@@ -88,10 +88,10 @@ class GridRegistry:
 
     def __init__(self) -> None:
         self.message_grid: int | None = None
-        self._by_grid: dict[int, GridEntry] = {}  # grid_id -> entry
-        self._by_win: dict[int, int] = {}         # Neovim window id -> grid_id
-        self._by_buf: dict[int, int] = {}         # Neovim buffer id -> owning grid_id
-        self._by_pane: dict[object, int] = {}     # Qt pane -> grid_id
+        self._by_grid: dict[int, GridEntry] = {}   # grid_id -> entry
+        self._by_win: dict[int, GridEntry] = {}    # Neovim window id -> entry
+        self._by_buf: dict[int, GridEntry] = {}    # Neovim buffer id -> owning entry
+        self._by_pane: dict[object, GridEntry] = {}  # Qt pane -> entry
 
     def get_kind_by_grid(self, grid_id: int) -> str:
         """Return the role of a grid: GRID_GLOBAL, GRID_MESSAGE, or GRID_WINDOW."""
@@ -111,13 +111,8 @@ class GridRegistry:
         """Start tracking a window grid backed by the given Qt pane; return its entry."""
         entry = GridEntry(grid_id, pane)
         self._by_grid[grid_id] = entry
-        self._by_pane[pane] = grid_id
+        self._by_pane[pane] = entry
         return entry
-
-    def has_grid(self, grid_id: int) -> bool:
-        """Whether a window grid entry exists for this grid."""
-        # C? y este método quien lo usa?
-        return grid_id in self._by_grid
 
     def set_win(self, grid_id: int, win_id: int) -> None:
         """Set (or update) the Neovim window id of a window grid."""
@@ -127,20 +122,20 @@ class GridRegistry:
         if entry.win_id is not None:
             self._by_win.pop(entry.win_id, None)
         entry.win_id = win_id
-        self._by_win[win_id] = grid_id
+        self._by_win[win_id] = entry
 
     def set_buffer(self, grid_id: int, bufnr: int, filepath: str) -> None:
         """Set (or update) the buffer and filepath a window grid shows."""
         entry = self._by_grid.get(grid_id)
         if entry is None:
             return
-        if entry.bufnr is not None and self._by_buf.get(entry.bufnr) == grid_id:
+        if entry.bufnr is not None and self._by_buf.get(entry.bufnr) is entry:
             self._by_buf.pop(entry.bufnr, None)
         entry.bufnr = bufnr
         entry.filepath = filepath
         # claim the buffer only if free, so the index keeps pointing at the first (owning) grid
-        # even while a duplicate is transiently being collapsed
-        self._by_buf.setdefault(bufnr, grid_id)
+        # even while a duplicate is transiently being collapsed (see _collapse_duplicate)
+        self._by_buf.setdefault(bufnr, entry)
 
     def forget_grid(self, grid_id: int) -> None:
         """Drop a grid that was destroyed."""
@@ -151,7 +146,7 @@ class GridRegistry:
             return
         if entry.win_id is not None:
             self._by_win.pop(entry.win_id, None)
-        if entry.bufnr is not None and self._by_buf.get(entry.bufnr) == grid_id:
+        if entry.bufnr is not None and self._by_buf.get(entry.bufnr) is entry:
             self._by_buf.pop(entry.bufnr, None)
         self._by_pane.pop(entry.pane, None)
 
@@ -168,29 +163,25 @@ class GridRegistry:
     ) -> GridEntry | None:
         """Look up the entry for exactly one key; return None if nothing matches.
 
-        Exactly one of grid_id/win_id/bufnr/pane/filepath must be given. Use this when a miss is
-        a normal outcome (a grid not built yet, a window/buffer/path not known here). When a miss
-        would mean a broken invariant, use require() instead.
+        Exactly one of grid_id/win_id/bufnr/pane/filepath must be given -- passing none or several
+        is a caller bug, not validated here. Use this when a miss is a normal outcome (a grid not
+        built yet, a window/buffer/path not known here). When a miss would mean a broken invariant,
+        use get_required() instead.
         """
-        given = [k for k in (grid_id, win_id, bufnr, pane, filepath) if k is not _UNSET]
-        assert len(given) == 1, "registry.get() takes exactly one key"
-        # C? me parece demasiado trabajo para cada llamada al .get(), cuando en realidad eso indicaría un error de programación; no haría la validación at all
         if grid_id is not _UNSET:
             return self._by_grid.get(grid_id)
         if win_id is not _UNSET:
-            return self._by_grid.get(self._by_win.get(win_id))
+            return self._by_win.get(win_id)
         if bufnr is not _UNSET:
-            return self._by_grid.get(self._by_buf.get(bufnr))
+            return self._by_buf.get(bufnr)
         if pane is not _UNSET:
-            return self._by_grid.get(self._by_pane.get(pane))
-        # C? en los últimos tres casos, no seria mejor que cada diccionario guardara el entry, y no el grid_id?
+            return self._by_pane.get(pane)
         for entry in self._by_grid.values():
             if entry.filepath == filepath:
                 return entry
-        # C? no convendría poner un diccionario en vez de iterar por los valores?
         return None
 
-    def require(
+    def get_required(
         self,
         *,
         grid_id=_UNSET,
@@ -202,7 +193,7 @@ class GridRegistry:
         """Run the same lookup as get(), but assert the entry exists (a known invariant)."""
         entry = self.get(grid_id=grid_id, win_id=win_id, bufnr=bufnr, pane=pane, filepath=filepath)
         assert entry is not None, (
-            f"registry.require() found nothing for grid_id={grid_id!r} win_id={win_id!r} "
+            f"registry.get_required() found nothing for grid_id={grid_id!r} win_id={win_id!r} "
             f"bufnr={bufnr!r} pane={pane!r} filepath={filepath!r}"
         )
         return entry
@@ -210,11 +201,6 @@ class GridRegistry:
     def get_all_entries(self) -> list:
         """Return all window grid entries."""
         return list(self._by_grid.values())
-
-    def has_path(self, filepath: str) -> bool:
-        """Whether some window grid currently shows the given filepath."""
-        # C? y este método quien lo usa?
-        return self.get(filepath=filepath) is not None
 
 
 # global and unique registry
@@ -460,7 +446,7 @@ class NvimNotifications:
             if win_id in self._pending_buffers:
                 bufnr, filepath = self._pending_buffers.pop(win_id)
                 registry.set_buffer(grid_id, bufnr, filepath)
-                self.main_window.refresh_tab(registry.require(grid_id=grid_id))
+                self.main_window.refresh_tab(registry.get_required(grid_id=grid_id))
         self._layout_statusline_strip()
 
     def _n_redraw__win_hide(self, *args):
