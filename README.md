@@ -69,6 +69,7 @@ These are the items lousely grouped to get there:
     - unit tests?
 
 **For 0.8:**
+- fix vsplit / hsplit
 - allow double-level logging (user selected to terminal, debug to a file if configured)
 - FIXME.94 allow logging system to use `logger.trace`
 - Improve swarm discover latency

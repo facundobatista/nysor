@@ -36,6 +36,7 @@ dev = [
     "logassert",
     "pytest-asyncio",
     "pytest-mock",
+    "pytest-timeout",
     "time-machine",
     "ruff",
 ]
@@ -51,6 +52,7 @@ Issues = "https://github.com/facundobatista/nysor/issues"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+timeout = 30
 
 [build-system]
 requires = ["setuptools>=64", "setuptools-scm"]

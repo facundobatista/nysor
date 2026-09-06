@@ -56,7 +56,7 @@ Find here how to install Neovim:<br/>
 <br/>
 &nbsp;&nbsp;&nbsp;&nbsp;<a href="https://neovim.io/doc/install/">https://neovim.io/doc/install/</a><br/>
 <br/>
-The <span style="font-family:monospace; color:green">nvim</span> executable should be in the system's PATH; alternatively you can indicate the path using the <span style="font-family:monospace; color:green">--nvim</span> parameter.
+The <span style="font-family:monospace; color:green">nvim</span> executable should be in the system's PATH; alternatively you can indicate the path using the <span style="font-family:monospace; color:green">--nvim</span> parameter (or the <span style="font-family:monospace; color:green">NYSOR_NVIM</span> env var).
 """  # NOQA
 
 _ABOUT_TEXT = """
@@ -89,6 +89,10 @@ UNNAMED_NAME = "[No Name]"
 
 # the character that prefixes titles to indicate the buffer is modified
 MODIFIED_INDICATOR = "●"
+
+# env var pointing to the Neovim executable to use when --nvim is not given; also honored by
+# the integration test suite (tests/integration/), so this is the one shared source of truth
+NVIM_ENV_VAR = "NYSOR_NVIM"
 
 
 def get_nysor_version():
@@ -1688,6 +1692,70 @@ class MainApp(QMainWindow):
         await dlg.wait()
 
 
+def process_args(args):
+    """Process the user arguments."""
+    if SPECIAL_STDIN_PATH in args.path:
+        if len(args.path) == 1:
+            # successful case of including the stdin path
+            requested_paths = SPECIAL_STDIN_PATH
+        else:
+            raise ValueError("Cannot specify special '-' among other paths")
+    else:
+        # avoid duplicates in the given paths but keep order (args.path will be short almost
+        # always, we can find in the list, no need for more advanced algos)
+        requested_paths = []
+        for path in args.path:
+            if path not in requested_paths:
+                requested_paths.append(path)
+
+    # resolve which nvim executable to use (if None NvimInterface falls back
+    # to "nvim" resolved via PATH)
+    if args.nvim is not None:
+        logger.debug("Using nvim from --nvim: {!r}", args.nvim)
+        nvim_exec_path = args.nvim
+    elif os.environ.get(NVIM_ENV_VAR):
+        nvim_exec_path = os.environ[NVIM_ENV_VAR]
+        logger.debug("Using nvim from {} env var: {!r}", NVIM_ENV_VAR, nvim_exec_path)
+    else:
+        nvim_exec_path = None
+
+    return requested_paths, nvim_exec_path
+
+
+async def main(event_loop, args, app_close_event):
+    """Start Nysor, opening only the requested paths not already handled elsewhere."""
+    nysor_version = get_nysor_version()
+    logger.info("Starting Nysor {}", nysor_version)
+
+    requested_paths, nvim_exec_path = process_args(args)
+
+    if requested_paths != SPECIAL_STDIN_PATH and requested_paths:
+        # ask the swarm about each path (concurrently) and
+        # keep only the ones no other Nysor is already showing
+        coros = (swarm.discover(event_loop, path) for path in requested_paths)
+        handled = await asyncio.gather(*coros)
+        paths_to_open = []
+        for path, others in zip(requested_paths, handled):
+            if others:
+                logger.info(
+                    "Path handled in other Nysor instance (not opening here): {}",
+                    path
+                )
+            else:
+                paths_to_open.append(path)
+        if not paths_to_open:
+            # every requested path is already open elsewhere -> this instance does not start
+            logger.info("All requested paths handled by other Nysor instances; not starting")
+            return
+    else:
+        paths_to_open = requested_paths
+
+    # start and show GUI
+    main_window = MainApp(nysor_version, event_loop, paths_to_open, nvim_exec_path)
+    main_window.show()
+    await app_close_event.wait()
+
+
 def start():
     """Start the application."""
     # mutually exclusive verbosity levels
@@ -1705,7 +1773,9 @@ def start():
             )
 
     # the rest of argument parsing
-    parser.add_argument("--nvim", action="store", help="Path to the Neovim executable.")
+    parser.add_argument(
+        "--nvim", action="store",
+        help=f"Path to the Neovim executable. Overrides the {NVIM_ENV_VAR} env var if given.")
     parser.add_argument(
         "-V", "--version", action="store_true",
         help="Show Nysor version and quit.",
@@ -1726,22 +1796,9 @@ def start():
         print("Nysor", get_nysor_version())
         return 0
 
-    if SPECIAL_STDIN_PATH in args.path:
-        if len(args.path) == 1:
-            # successful case of including the stdin path
-            requested_paths = SPECIAL_STDIN_PATH
-        else:
-            raise ValueError("Cannot specify special '-' among other paths")
-    else:
-        # avoid duplicates in the given paths but keep order (args.path will be short almost
-        # always, we can find in the list, no need for more advanced algos)
-        requested_paths = []
-        for path in args.path:
-            if path not in requested_paths:
-                requested_paths.append(path)
-
     # setup logging and create the app itself
     logsetup(args.loglevel)
+
     app = qasync.QApplication(sys.argv)
 
     # connect with async's event loop
@@ -1751,37 +1808,6 @@ def start():
     app_close_event = asyncio.Event()
     app.aboutToQuit.connect(app_close_event.set)
 
-    async def main():
-        """Start Nysor, opening only the requested paths not already handled elsewhere."""
-        nysor_version = get_nysor_version()
-        logger.info("Starting Nysor {}", nysor_version)
-
-        if requested_paths != SPECIAL_STDIN_PATH and requested_paths:
-            # ask the swarm about each path (concurrently) and
-            # keep only the ones no other Nysor is already showing
-            coros = (swarm.discover(event_loop, path) for path in requested_paths)
-            handled = await asyncio.gather(*coros)
-            paths_to_open = []
-            for path, others in zip(requested_paths, handled):
-                if others:
-                    logger.info(
-                        "Path handled in other Nysor instance (not opening here): {}",
-                        path
-                    )
-                else:
-                    paths_to_open.append(path)
-            if not paths_to_open:
-                # every requested path is already open elsewhere -> this instance does not start
-                logger.info("All requested paths handled by other Nysor instances; not starting")
-                return
-        else:
-            paths_to_open = requested_paths
-
-        # start and show GUI
-        main_window = MainApp(nysor_version, event_loop, paths_to_open, args.nvim)
-        main_window.show()
-        await app_close_event.wait()
-
     # go!
     with event_loop:
-        event_loop.run_until_complete(main())
+        event_loop.run_until_complete(main(event_loop, args, app_close_event))

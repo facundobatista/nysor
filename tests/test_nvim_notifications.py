@@ -16,14 +16,18 @@ from nysor.nvim_notifications import DynamicCache, GridRegistry, NvimNotificatio
 def notif(mocker):
     """NvimNotifications with a mocked main_window, strips, and call_async.
 
-    Grid 2 is pre-registered as a window whose pane's display is `notif._editor`.
+    Grid 2 is pre-registered as a window whose pane's display is `notif._editor`; its entry is
+    kept at `notif._entry` for tests that need to assert against it. The registry is patched to a
+    fresh instance for the duration of the test, so state never leaks between tests (it is a
+    module-level singleton in production).
     """
+    mocker.patch.object(nvim_notifications, "registry", GridRegistry())
     mocker.patch("nysor.nvim_notifications.call_async")
     nn = NvimNotifications(main_window=MagicMock())
     nn._editor = MagicMock()          # the TextDisplay of grid 2's tab
     nn._pane = MagicMock()            # the EditorPane of grid 2's tab
     nn._pane.text_display = nn._editor
-    nn.grids.add_grid(2, nn._pane)  # grid 2 -> pane -> display
+    nn._entry = nvim_notifications.registry.add_grid(2, nn._pane)  # grid 2 -> pane -> display
     nn.message_display = MagicMock()
     nn.statusline_display = MagicMock()
     return nn
@@ -84,9 +88,9 @@ class TestNvimNotificationsHandler:
 
     def test_known_method_is_dispatched(self, notif):
         """handler() calls the matching _h__* method with the notification params."""
-        notif.grids.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
         notif.handler("modified_changed", [5, True])
-        notif.main_window.set_tab_modified.assert_called_once_with(2, True)
+        notif.main_window.set_tab_modified.assert_called_once_with(notif._entry, True)
 
     def test_unknown_method_logs_error(self, notif, logs):
         """handler() logs an error for unknown methods and does not raise."""
@@ -123,17 +127,17 @@ class TestNvimNotificationsHandlers:
 
     def test_modified_changed(self, notif):
         """A modified change for a known window marks that window's tab."""
-        notif.grids.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
         notif._h__modified_changed(5, True)
-        notif.main_window.set_tab_modified.assert_called_once_with(2, True)
+        notif.main_window.set_tab_modified.assert_called_once_with(notif._entry, True)
 
     def test_window_buffer_known_window(self, notif):
         """Buffer info for a known window records the buffer and refreshes the tab."""
-        notif.grids.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
         notif._h__window_buffer(5, 7, "/some/path")
-        assert notif.grids.get_grid_by_buffer(7) == 2
-        assert notif.grids.get_entry_by_grid(2).filepath == "/some/path"
-        notif.main_window.refresh_tab.assert_called_once_with(2)
+        assert nvim_notifications.registry.get(bufnr=7) is notif._entry
+        assert notif._entry.filepath == "/some/path"
+        notif.main_window.refresh_tab.assert_called_once_with(notif._entry)
 
     def test_window_buffer_pending_for_unknown_window(self, notif):
         """Buffer info for a not-yet-known window is stashed until its win_pos arrives."""
