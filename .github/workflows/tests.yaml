@@ -15,6 +15,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
         python-version: ["3.12", "3.13", "3.14"]
+        nvim-version: ["0.12.2", "0.12.5"]
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -34,6 +35,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-opencv
+
+      # feeds the integration tests in tests/integration/, which skip themselves if this is not
+      # set and nothing usable is found on PATH either (see tests/integration/conftest.py)
+      - name: Install Neovim ${{ matrix.nvim-version }} (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          curl -Lo /tmp/nvim.tar.gz "https://github.com/neovim/neovim/releases/download/v${{ matrix.nvim-version }}/nvim-linux-x86_64.tar.gz"
+          tar -xzf /tmp/nvim.tar.gz -C /tmp
+          echo "NYSOR_NVIM=/tmp/nvim-linux-x86_64/bin/nvim" >> "$GITHUB_ENV"
 
       - name: Install project dependencies
         run: |

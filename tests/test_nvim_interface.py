@@ -162,20 +162,20 @@ async def nvim_with_api(mocker, sock_path):
 class TestExtHook:
 
     def test_basic(self, mocker):
-        """Decode type and ID from big-endian bytes."""
+        """Decode type and the msgpack-encoded integer id from the payload."""
         mocker.patch.dict(_EXT_TYPE_CODES, {7: "Buffer"})
-        assert ext_hook(7, b'\x00\x01') == ["Buffer", 1]
+        assert ext_hook(7, msgpack.packb(1)) == ["Buffer", 1]
 
     def test_different_type_codes(self, mocker):
         """Different type codes map to the correct object type names."""
         mocker.patch.dict(_EXT_TYPE_CODES, {1: "Window", 2: "Tabpage"})
-        assert ext_hook(1, b'\x00\x05') == ["Window", 5]
-        assert ext_hook(2, b'\x00\x0a') == ["Tabpage", 10]
+        assert ext_hook(1, msgpack.packb(5)) == ["Window", 5]
+        assert ext_hook(2, msgpack.packb(10)) == ["Tabpage", 10]
 
     def test_multi_byte_id(self, mocker):
-        """Multi-byte big-endian IDs are decoded correctly."""
+        """Multi-byte ids (msgpack uint16/uint32) are decoded correctly."""
         mocker.patch.dict(_EXT_TYPE_CODES, {0: "Buffer"})
-        assert ext_hook(0, b'\x01\x00') == ["Buffer", 256]
+        assert ext_hook(0, msgpack.packb(1000)) == ["Buffer", 1000]  # b'\xcd\x03\xe8'
 
 
 class TestGetUniqueSockPath:
@@ -349,16 +349,16 @@ class TestNvimInterfaceQuit:
         assert result is None
 
     async def test_normal_quit(self, nvim):
-        """Sends quit command and Enter, then waits for process to finish."""
+        """Sends Esc and 'qall', then waits for process to finish."""
         interface, mock = nvim
         quit_task = asyncio.create_task(interface.quit())
 
         msgid1, method1, params1 = await mock.recv_request()
         msgid2, method2, params2 = await mock.recv_request()
-        assert method1 == "nvim_command"
-        assert params1 == ["quit"]
-        assert method2 == "nvim_input"
-        assert params2 == ["\r"]
+        assert method1 == "nvim_input"
+        assert params1 == ["<Esc>"]
+        assert method2 == "nvim_command"
+        assert params2 == ["qall"]
 
         mock.exit(0)
         interface._receive_responses()
@@ -370,8 +370,8 @@ class TestNvimInterfaceQuit:
         interface, mock = nvim
         quit_task = asyncio.create_task(interface.quit())
 
-        msgid, _, _ = await mock.recv_request()  # nvim_command quit
-        await mock.recv_request()                 # nvim_input \r
+        await mock.recv_request()                # nvim_input <Esc>
+        msgid, _, _ = await mock.recv_request()  # nvim_command qall
         await mock.send_response(msgid, error=[0, "E37: No write since last change"])
         await asyncio.sleep(0)
         result = await quit_task

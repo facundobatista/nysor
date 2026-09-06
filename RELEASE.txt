@@ -1,0 +1,13 @@
+**Nysor 0.6 released!**
+
+Nysor is yet another graphical interface for Neovim. Written in Python, with Qt.
+
+The main improvement in this version is that you can make it read content from stdin if instead of a path you pass '-'. E.g.:
+
+`grep facu /etc/passwd | nysor -`
+
+Try it:
+
+`uvx nysor`
+
+Full details in the release: https://github.com/facundobatista/nysor/releases/tag/0.6

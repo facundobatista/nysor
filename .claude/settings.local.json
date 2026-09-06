@@ -1,11 +1,25 @@
 {
   "permissions": {
     "allow": [
-      "Bash(pytest tests/test_nvim_interface.py -x 2>&1)",
-      "Bash(pytest tests/test_nvim_interface.py -x --timeout=5 2>&1)",
-      "Bash(pytest tests/test_nvim_interface.py -x -v --timeout=5 2>&1)",
-      "Bash(pytest tests/ --timeout=10 2>&1)",
-      "Bash(pytest tests/test_nvim_notifications.py -v --timeout=10 2>&1)"
+      "Bash(python -m py_compile nysor/main.py)",
+      "Bash(python3 -m py_compile nysor/main.py)",
+      "Read(//home/facundo/sistema/**)",
+      "Read(//usr/share/nvim/runtime/doc/**)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ codespell nysor tests docs)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ ruff check -q)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ ruff check)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ ruff check --output-format=concise)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ env/bin/ruff check nysor/)",
+      "Bash(pytest *)",
+      "Bash(python -m pytest*)",
+      "Bash(python3 -m pytest*)",
+      "Bash(env/bin/python -m pytest*)",
+      "Bash(env/bin/pytest*)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ pytest*)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ python -m pytest*)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ env/bin/python -m pytest*)",
+      "Skill(update-config)",
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ env/bin/ruff check nysor/main.py)"
     ]
   }
 }

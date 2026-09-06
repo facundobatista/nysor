@@ -6,11 +6,18 @@
 
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any
+
+from PyQt6.QtWidgets import QWidget
 
 from nysor.utils import call_async
 
 logger = logging.getLogger(__name__)
+
+# sentinel telling GridRegistry.get()/get_required() a keyword was not passed at all, distinct from
+# a key explicitly looked up as None (e.g. get(pane=None) is a valid, if useless, lookup)
+_UNSET = object()
 
 
 class DynamicCache:
@@ -46,6 +53,160 @@ class DynamicCache:
             self._data[section].clear()
 
 
+@dataclass
+class GridEntry:
+    """One row of the GridRegistry: everything nysor knows about a single window grid.
+
+    It ties together, for one grid, the nouns that already exist elsewhere -- the Neovim window
+    id, the buffer, the Qt pane and the filepath. It is not a new domain concept, just the
+    association among them. The Qt pane is held as an opaque reference (the registry never touches
+    Qt).
+    """
+    grid_id: int
+    pane: QWidget
+    win_id: int | None = None
+    bufnr: int | None = None
+    filepath: str | None = None
+
+
+class GridRegistry:
+    """Single source of truth relating Neovim grids/windows/buffers to Qt panes.
+
+    Grid 1 is the global compositing grid (never rendered directly). One grid is the message grid
+    (announced by 'msg_set_pos'); the bottom strip renders it. Every other grid is a window grid,
+    tracked as a GridEntry, with reverse indexes so lookups by window/buffer/pane are O(1).
+    The tab's position is intentionally NOT stored here: the QTabWidget owns tab order (so dragging
+    tabs to reorder just works), and the current index is asked for on demand.
+    """
+
+    GLOBAL_GRID_ID = 1
+
+    # grid roles, returned by get_kind_by_grid() and used across the code as GridRegistry.GRID_*
+    GRID_GLOBAL = "global"
+    GRID_MESSAGE = "message"
+    GRID_WINDOW = "window"
+
+    def __init__(self) -> None:
+        self.message_grid: int | None = None
+        self._by_grid: dict[int, GridEntry] = {}   # grid_id -> entry
+        self._by_win: dict[int, GridEntry] = {}    # Neovim window id -> entry
+        self._by_buf: dict[int, GridEntry] = {}    # Neovim buffer id -> owning entry
+        self._by_pane: dict[object, GridEntry] = {}  # Qt pane -> entry
+
+    def get_kind_by_grid(self, grid_id: int) -> str:
+        """Return the role of a grid: GRID_GLOBAL, GRID_MESSAGE, or GRID_WINDOW."""
+        if grid_id == self.GLOBAL_GRID_ID:
+            return self.GRID_GLOBAL
+        if grid_id == self.message_grid:
+            return self.GRID_MESSAGE
+        return self.GRID_WINDOW
+
+    def set_message_grid(self, grid_id: int) -> None:
+        """Record which grid is the message grid."""
+        self.message_grid = grid_id
+
+    # -- entry mutation
+
+    def add_grid(self, grid_id: int, pane) -> GridEntry:
+        """Start tracking a window grid backed by the given Qt pane; return its entry."""
+        entry = GridEntry(grid_id, pane)
+        self._by_grid[grid_id] = entry
+        self._by_pane[pane] = entry
+        return entry
+
+    def set_win(self, grid_id: int, win_id: int) -> None:
+        """Set (or update) the Neovim window id of a window grid."""
+        entry = self._by_grid.get(grid_id)
+        if entry is None:
+            return
+        if entry.win_id is not None:
+            self._by_win.pop(entry.win_id, None)
+        entry.win_id = win_id
+        self._by_win[win_id] = entry
+
+    def set_buffer(self, grid_id: int, bufnr: int, filepath: str) -> None:
+        """Set (or update) the buffer and filepath a window grid shows."""
+        entry = self._by_grid.get(grid_id)
+        if entry is None:
+            return
+        if entry.bufnr is not None and self._by_buf.get(entry.bufnr) is entry:
+            self._by_buf.pop(entry.bufnr, None)
+        entry.bufnr = bufnr
+        entry.filepath = filepath
+        # claim the buffer only if free, so the index keeps pointing at the first (owning) grid
+        # even while a duplicate is transiently being collapsed (see _collapse_duplicate)
+        self._by_buf.setdefault(bufnr, entry)
+
+    def forget_grid(self, grid_id: int) -> None:
+        """Drop a grid that was destroyed."""
+        if grid_id == self.message_grid:
+            self.message_grid = None
+        entry = self._by_grid.pop(grid_id, None)
+        if entry is None:
+            return
+        if entry.win_id is not None:
+            self._by_win.pop(entry.win_id, None)
+        if entry.bufnr is not None and self._by_buf.get(entry.bufnr) is entry:
+            self._by_buf.pop(entry.bufnr, None)
+        self._by_pane.pop(entry.pane, None)
+
+    # -- queries
+
+    def get(
+        self,
+        *,
+        grid_id=_UNSET,
+        win_id=_UNSET,
+        bufnr=_UNSET,
+        pane=_UNSET,
+        filepath=_UNSET
+    ) -> GridEntry | None:
+        """Look up the entry for exactly one key; return None if nothing matches.
+
+        Exactly one of grid_id/win_id/bufnr/pane/filepath must be given -- passing none or several
+        is a caller bug, not validated here. Use this when a miss is a normal outcome (a grid not
+        built yet, a window/buffer/path not known here). When a miss would mean a broken invariant,
+        use get_required() instead.
+        """
+        if grid_id is not _UNSET:
+            return self._by_grid.get(grid_id)
+        if win_id is not _UNSET:
+            return self._by_win.get(win_id)
+        if bufnr is not _UNSET:
+            return self._by_buf.get(bufnr)
+        if pane is not _UNSET:
+            return self._by_pane.get(pane)
+        for entry in self._by_grid.values():
+            if entry.filepath == filepath:
+                return entry
+        return None
+
+    def get_required(
+        self,
+        *,
+        grid_id=_UNSET,
+        win_id=_UNSET,
+        bufnr=_UNSET,
+        pane=_UNSET,
+        filepath=_UNSET
+    ) -> GridEntry:
+        """Run the same lookup as get(), but assert the entry exists (a known invariant)."""
+        entry = self.get(grid_id=grid_id, win_id=win_id, bufnr=bufnr, pane=pane, filepath=filepath)
+        assert entry is not None, (
+            f"registry.get_required() found nothing for grid_id={grid_id!r} win_id={win_id!r} "
+            f"bufnr={bufnr!r} pane={pane!r} filepath={filepath!r}"
+        )
+        return entry
+
+    def get_all_entries(self) -> list:
+        """Return all window grid entries."""
+        return list(self._by_grid.values())
+
+
+# global and unique registry
+registry = GridRegistry()
+
+
 class NvimNotifications:
     """Dance at the rhythm of Neovim.
 
@@ -55,13 +216,85 @@ class NvimNotifications:
 
     def __init__(self, main_window):
         self.main_window = main_window
-        self.text_display = None  # will be set before first usage
+        self.message_display = None  # bottom strip (message grid) display; set before use
+        self.statusline_display = None  # strip rendering the status row(s) of the global grid
         self.options = {}
 
         # this two currently work "in tandem", we may want to unify them under the same structure
         # in the future
         self.structs = {}
         self.dyncache = DynamicCache()
+
+        # multigrid bookkeeping
+        self._grid_sizes = {}  # grid_id -> (width, height) as last reported by grid_resize
+        self._msg_row = None  # top row of the message grid within the global grid
+        # buffer info that arrived before its window grid was known (win_id -> (bufnr, filepath))
+        self._pending_buffers = {}
+
+    def _display_for(self, grid_id):
+        """Return the display that renders the given grid, or None if not rendered."""
+        kind = registry.get_kind_by_grid(grid_id)
+        if kind == GridRegistry.GRID_GLOBAL:
+            # under multigrid the global grid is empty except for the statusline row(s),
+            # which the statusline strip renders (using a view origin, see below)
+            return self.statusline_display
+        if kind == GridRegistry.GRID_MESSAGE:
+            return self.message_display
+        return self._ensure_editor(grid_id)
+
+    def _ensure_editor(self, grid_id):
+        """Return the editor display for a window grid, creating its tab the first time.
+
+        The editor layer (main_window) owns font/cursor-mode and applies them to the freshly
+        built display; here we only apply what is genuinely notification data: the grid size.
+        """
+        # under multigrid only the current tabpage's window renders, so a grid we are asked to
+        # render/build IS the active one; mark it BEFORE build_editor_tab, whose font setup
+        # re-layouts the window and would otherwise resize the previously-active (now hidden) tab
+        self.main_window.mark_active_grid(grid_id)
+        entry = registry.get(grid_id=grid_id)
+        if entry is None:
+            display = self.main_window.build_editor_tab()
+            entry = registry.add_grid(grid_id, display.pane)
+            size = self._grid_sizes.get(grid_id)
+            if size is not None:
+                display.resize_view(size)
+        return entry.pane.text_display
+
+    def _layout_message_strip(self):
+        """Lay out the message strip from the message grid's own size and position.
+
+        Width is exactly the message grid's width (as Neovim reported it). The message grid is
+        full height but only its bottom part is on screen; that visible height is the grid's
+        height minus the row where 'msg_set_pos' placed it.
+        """
+        grid = registry.message_grid
+        if self.message_display is None or grid is None:
+            return
+        size = self._grid_sizes.get(grid)
+        if size is None or self._msg_row is None:
+            return
+        width, height = size
+        visible_rows = max(1, height - self._msg_row)
+        self.message_display.resize_view((width, visible_rows))
+        self.message_display.updateGeometry()
+
+    def _layout_statusline_strip(self):
+        """Lay out the statusline strip: the single global-grid row just above the messages.
+
+        Width is exactly the global grid's width (as Neovim reported it). The statusline sits one
+        row above the message area, so its row is `msg_row - 1` (independent of window geometry;
+        this is set early, from msg_set_pos/grid_resize, before the content arrives).
+        """
+        if self.statusline_display is None or self._msg_row is None:
+            return
+        size = self._grid_sizes.get(GridRegistry.GLOBAL_GRID_ID)
+        if size is None:
+            return
+        width, _ = size
+        self.statusline_display.view_origin_row = max(0, self._msg_row - 1)
+        self.statusline_display.resize_view((width, 1))
+        self.statusline_display.updateGeometry()
 
     def _h__redraw(self, *parameters: tuple[Any]):
         """Handle the 'redraw' notification."""
@@ -84,13 +317,25 @@ class NvimNotifications:
                 except Exception:
                     logger.exception("Crash when calling {!r} with {!r}", n_name, args)
 
-    def _h__modified_changed(self, is_modified: bool):
-        """Handle the notification when the buffer starts/stop having changes."""
-        self.main_window.set_buffer_state(is_modified=is_modified)
+    def _h__modified_changed(self, win_id: int, is_modified: bool):
+        """Handle the notification when a window's buffer starts/stops having changes."""
+        entry = registry.get(win_id=win_id)
+        # entry may legitimately be None when the change arrives for a window we don't know yet
+        if entry is not None:
+            self.main_window.set_tab_modified(entry, is_modified)
 
-    def _h__filepath_changed(self, filepath: str):
-        """Handle the notification when the buffer has a file associated or not."""
-        self.main_window.set_buffer_state(filepath=filepath)
+    def _h__window_buffer(self, win_id: int, bufnr: int, filepath: str):
+        """Handle the notification about which buffer a window shows.
+
+        Records the buffer/filepath and updates the tab. If the window's grid is not known yet
+        (win_pos not received), we stash it and apply it when win_pos arrives.
+        """
+        entry = registry.get(win_id=win_id)
+        if entry is not None:
+            registry.set_buffer(entry.grid_id, bufnr, filepath)
+            self.main_window.refresh_tab(entry)
+        else:
+            self._pending_buffers[win_id] = (bufnr, filepath)
 
     def handler(self, method: str, parameters: list[Any]):
         """Handle all notifications from Neovim."""
@@ -105,53 +350,123 @@ class NvimNotifications:
 
     # -- specific notification handlers
 
-    def _n_redraw__default_colors_set(self, colors):
-        """Set the default colors."""
-        rgb_fg, rgb_bg, rgb_sp, _, _ = colors  # last two are ignored because are for terminals
-        self.structs.setdefault("default_colors", {}).update({
-            "foreground": rgb_fg,
-            "background": rgb_bg,
-            "special": rgb_sp,
-        })
+    def _n_redraw__default_colors_set(self, *args):
+        """Set the default colors (one redraw may carry several; the last wins)."""
+        for rgb_fg, rgb_bg, rgb_sp, _term_fg, _term_bg in args:  # last two are for terminals
+            self.structs.setdefault("default_colors", {}).update({
+                "foreground": rgb_fg,
+                "background": rgb_bg,
+                "special": rgb_sp,
+            })
         self.dyncache.clean("default_colors")
 
     def _n_redraw__flush(self, _):
-        """Flush all changes to the grid."""
-        self.text_display.flush()
+        """Flush all changes to the grids."""
+        for entry in registry.get_all_entries():
+            entry.pane.text_display.flush()
+        if self.message_display is not None:
+            self.message_display.flush()
+        if self.statusline_display is not None:
+            self.statusline_display.flush()
 
-    def _n_redraw__grid_clear(self, args):
-        """Clear the grid."""
-        (grid_id,) = args
-        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
-        self.text_display.clear()
+    def _n_redraw__grid_clear(self, *args):
+        """Clear the grid (one redraw may carry several)."""
+        for (grid_id,) in args:
+            display = self._display_for(grid_id)
+            if display is not None:
+                display.clear()
 
-    def _n_redraw__grid_cursor_goto(self, args):
-        """Resize a grid."""
-        grid_id, row, col = args
-        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
-        self.text_display.set_cursor(row, col)
+    def _n_redraw__grid_cursor_goto(self, *args):
+        """Move the cursor in the grid (one redraw may carry several)."""
+        for grid_id, row, col in args:
+            display = self._display_for(grid_id)
+            if display is not None:
+                display.set_cursor(row, col)
 
     def _n_redraw__grid_line(self, *args):
         """Expose a line in the grid."""
         for item in args:
             grid, row, col_start, cells, wrap = item
-            assert grid == 1  # FIXME.90: same question we do in grid_resize
+            display = self._display_for(grid)
+            if display is not None:
+                # note we ignore "wrap", couldn't find proper utility for it
+                display.write_grid(row, col_start, cells)
 
-            # note we ignore "wrap", couldn't find proper utility for it
-            self.text_display.write_grid(row, col_start, cells)
+    def _n_redraw__grid_resize(self, *args):
+        """Resize grids at exactly the size Neovim reports (one redraw may carry several)."""
+        for grid_id, width, height in args:
+            self._grid_sizes[grid_id] = (width, height)
+            kind = registry.get_kind_by_grid(grid_id)
+            if kind == GridRegistry.GRID_WINDOW:
+                # a not-yet-created window keeps its size in _grid_sizes; _ensure_editor applies it
+                entry = registry.get(grid_id=grid_id)
+                if entry is not None:
+                    entry.pane.text_display.resize_view((width, height))
+            elif kind == GridRegistry.GRID_MESSAGE:
+                self._layout_message_strip()
+            elif kind == GridRegistry.GRID_GLOBAL:
+                self._layout_statusline_strip()
 
-    def _n_redraw__grid_resize(self, args):
-        """Resize a grid."""
-        grid_id, width, height = args
-        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
-        self.text_display.resize_view((width, height))
+    def _n_redraw__grid_scroll(self, *args):
+        """Scroll a grid (one redraw may carry several scroll ops)."""
+        for grid_id, top, bottom, left, right, rows, cols in args:
+            display = self._display_for(grid_id)
+            if display is not None:
+                display.scroll((top, bottom, rows), (left, right, cols))
 
-    def _n_redraw__grid_scroll(self, args):
-        """Scroll a grid."""
-        print("=========== gs raw", args)
-        grid_id, top, bottom, left, right, rows, cols = args
-        assert grid_id == 1  # FIXME.90: is it always 1? when do we have more than one?
-        self.text_display.scroll((top, bottom, rows), (left, right, cols))
+    def _n_redraw__chdir(self, *args):
+        """Neovim changed its working directory. Nothing to render; ignored for now."""
+
+    def _n_redraw__grid_destroy(self, *args):
+        """Drop grids that Neovim destroyed (their windows were closed)."""
+        for (grid_id,) in args:
+            entry = registry.get(grid_id=grid_id)
+            registry.forget_grid(grid_id)
+            if entry is not None:
+                # let the GUI decide what to do with that window's buffer (close it, or, if it
+                # has unsaved changes, re-show it and re-attach this tab)
+                self.main_window.on_editor_window_closed(entry)
+
+    def _n_redraw__win_pos(self, *args):
+        """Associate window grids with their Neovim window handles and geometry."""
+        for grid_id, win_handle, _startrow, _startcol, _width, _height in args:
+
+            # normalize a window handle (decoded as ['Window', id]) to its numeric id
+            win_type, win_id = win_handle
+            assert win_type == "Window"
+
+            # ensure the window has its editor tab, record its Neovim window id, and make it the
+            # active one (this is how opening a file in a new tabpage switches the GUI to it);
+            # _ensure_editor marks this grid active (before its build relayouts the window)
+            self._ensure_editor(grid_id)
+            registry.set_win(grid_id, win_id)
+            self.main_window.set_active_editor(grid_id)
+
+            # if buffer info arrived before this window was known, apply it now
+            if win_id in self._pending_buffers:
+                bufnr, filepath = self._pending_buffers.pop(win_id)
+                registry.set_buffer(grid_id, bufnr, filepath)
+                self.main_window.refresh_tab(registry.get_required(grid_id=grid_id))
+        self._layout_statusline_strip()
+
+    def _n_redraw__win_hide(self, *args):
+        """Handle windows no longer shown (e.g. belonging to an inactive tabpage)."""
+
+    def _n_redraw__win_close(self, *args):
+        """Handle closed windows; the paired grid_destroy cleans the registry."""
+
+    def _n_redraw__win_viewport_margins(self, *args):
+        """Window internal margins (winbar, borders). Accepted and ignored for now."""
+
+    def _n_redraw__msg_set_pos(self, *args):
+        """Define which grid is the message grid and where it starts."""
+        for batch in args:
+            grid_id, row = batch[0], batch[1]
+            registry.set_message_grid(grid_id)
+            self._msg_row = row
+        self._layout_message_strip()
+        # the message row is also the lower bound of the statusline region
+        self._layout_statusline_strip()
 
     def _n_redraw__hl_attr_define(self, *args):
         """Add highlights with their attributes.
@@ -179,32 +494,32 @@ class NvimNotifications:
             hl_groups[group_name] = hl_id
         self.dyncache.clean("hl-groups")
 
-    def _n_redraw__mode_change(self, args):
-        """Information about cursor mode."""
-        mode, mode_idx = args
-        # we ignore the mode idx as we stored in the modes in a dict using the name
-        mode_info = self.structs["mode-info"][mode]
-        self.text_display.change_mode(mode_info)
+    def _n_redraw__mode_change(self, *args):
+        """Cursor mode change; the editor layer owns and applies it (may carry several)."""
+        for mode, _mode_idx in args:
+            # we ignore the mode idx as we stored the modes in a dict using the name
+            mode_info = self.structs["mode-info"][mode]
+            self.main_window.set_editor_mode(mode_info)
 
-    def _n_redraw__mode_info_set(self, args):
-        """Information about cursor mode."""
-        cursor_style_enabled, mode_info = args
-        assert cursor_style_enabled  # may it come in False? what do we do? delete previous modes?
+    def _n_redraw__mode_info_set(self, *args):
+        """Cursor mode definitions (may carry several)."""
+        for cursor_style_enabled, mode_info in args:
+            assert cursor_style_enabled  # may it come False? delete previous modes? (unclear)
 
-        info = {}
-        for mi in mode_info:
-            # store by name (and remove it from the real data, together with short name)
-            name = mi.pop("name")
-            del mi["short_name"]
-            info[name] = mi
+            info = {}
+            for mi in mode_info:
+                # store by name (and remove it from the real data, together with short name)
+                name = mi.pop("name")
+                del mi["short_name"]
+                info[name] = mi
 
-        self.structs.setdefault("mode-info", {}).update(info)
-        self.dyncache.clean("mode-info")
+            self.structs.setdefault("mode-info", {}).update(info)
+            self.dyncache.clean("mode-info")
 
-    def _n_redraw__mouse_on(self, args):
+    def _n_redraw__mouse_on(self, *args):
         """Properly ignored."""
 
-    def _n_redraw__mouse_off(self, args):
+    def _n_redraw__mouse_off(self, *args):
         """Properly ignored."""
 
     def _n_redraw__option_set(self, *options):
@@ -212,28 +527,31 @@ class NvimNotifications:
         logger.debug("[NvimNotifications] options set: {}", options)
         self.options.update(options)
 
-        # react to some of those options
+        # react to some of those options; the editor layer owns and applies the font
         if "guifont" in options:
             name, size = options["guifont"].split(":")
             assert size[0] == "h"
             size = float(size[1:])
-            self.text_display.set_font(name, size)
+            self.main_window.set_editor_font(name, size)
 
-    def _n_redraw__set_icon(self, param):
-        """Set the icon, if any."""
-        (icon,) = param
-        if icon:
-            logger.warning("[NvimNotifications] need to implement set icon with {!r}", icon)
+    def _n_redraw__set_icon(self, *args):
+        """Set the icon, if any (one redraw may carry several)."""
+        for (icon,) in args:
+            if icon:
+                logger.warning("[NvimNotifications] need to implement set icon with {!r}", icon)
 
-    def _n_redraw__set_title(self, param):
-        """Set title."""
-        (title,) = param
-        self.main_window.setWindowTitle(title)
+    def _n_redraw__set_title(self, *args):
+        """Ignore Neovim's global title (the editor layer titles each GUI window itself).
 
-    def _n_redraw__win_viewport(self, args):
-        """Information for the GUI viewport."""
-        grid, objinfo, topline, botline, curline, curcol, line_count, scroll_delta = args
-        # FIXME.90: ignore grid and objinfo so far, need to revisit this when multiwindow
+        Neovim's title reflects the CURRENT window (which may be a detached one), but each GUI
+        window's title must follow its own shown tab -- see MainApp._refresh_main_title and
+        _refresh_tab_label.
+        """
 
+    def _n_redraw__win_viewport(self, *args):
+        """Viewport info per window; routed to the owning pane (may carry several windows)."""
         # Note: can't find use to scroll_delta (maybe for smooth scrollbar?)
-        call_async(self.main_window.adjust_viewport, topline, botline, line_count, curcol)
+        for grid, _win, topline, botline, _curline, curcol, line_count, _scroll_delta in args:
+            entry = registry.get(grid_id=grid)
+            if entry is not None:
+                call_async(entry.pane.adjust_viewport, topline, botline, line_count, curcol)

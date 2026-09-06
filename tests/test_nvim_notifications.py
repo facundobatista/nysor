@@ -9,15 +9,27 @@ from unittest.mock import MagicMock
 import pytest
 
 from nysor import nvim_notifications
-from nysor.nvim_notifications import DynamicCache, NvimNotifications
+from nysor.nvim_notifications import DynamicCache, GridRegistry, NvimNotifications
 
 
 @pytest.fixture
 def notif(mocker):
-    """NvimNotifications with mocked main_window, text_display, and call_async."""
+    """NvimNotifications with a mocked main_window, strips, and call_async.
+
+    Grid 2 is pre-registered as a window whose pane's display is `notif._editor`; its entry is
+    kept at `notif._entry` for tests that need to assert against it. The registry is patched to a
+    fresh instance for the duration of the test, so state never leaks between tests (it is a
+    module-level singleton in production).
+    """
+    mocker.patch.object(nvim_notifications, "registry", GridRegistry())
     mocker.patch("nysor.nvim_notifications.call_async")
     nn = NvimNotifications(main_window=MagicMock())
-    nn.text_display = MagicMock()
+    nn._editor = MagicMock()          # the TextDisplay of grid 2's tab
+    nn._pane = MagicMock()            # the EditorPane of grid 2's tab
+    nn._pane.text_display = nn._editor
+    nn._entry = nvim_notifications.registry.add_grid(2, nn._pane)  # grid 2 -> pane -> display
+    nn.message_display = MagicMock()
+    nn.statusline_display = MagicMock()
     return nn
 
 
@@ -75,9 +87,10 @@ class TestDynamicCache:
 class TestNvimNotificationsHandler:
 
     def test_known_method_is_dispatched(self, notif):
-        """handler() calls the matching _h__* method."""
-        notif.handler("modified_changed", [True])
-        notif.main_window.set_buffer_state.assert_called_once_with(is_modified=True)
+        """handler() calls the matching _h__* method with the notification params."""
+        nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        notif.handler("modified_changed", [5, True])
+        notif.main_window.set_tab_modified.assert_called_once_with(notif._entry, True)
 
     def test_unknown_method_logs_error(self, notif, logs):
         """handler() logs an error for unknown methods and does not raise."""
@@ -89,8 +102,8 @@ class TestNvimNotificationsRedraw:
 
     def test_known_submethod_is_dispatched(self, notif):
         """_h__redraw() calls the matching _n_redraw__* method."""
-        notif._h__redraw(["set_title", ["My Title"]])
-        notif.main_window.setWindowTitle.assert_called_once_with("My Title")
+        notif._h__redraw(["option_set", ["guifont", "Monospace:h14"]])
+        notif.main_window.set_editor_font.assert_called_once_with("Monospace", 14.0)
 
     def test_unknown_submethod_logs_error(self, notif, logs):
         """_h__redraw() logs an error for unknown submethods and does not raise."""
@@ -99,28 +112,38 @@ class TestNvimNotificationsRedraw:
 
     def test_exception_is_caught_and_execution_continues(self, notif, logs):
         """Exception in one submethod is logged; remaining submethods still run."""
-        notif.text_display.flush.side_effect = RuntimeError("boom")
-        notif._h__redraw(["flush", None], ["set_title", ["Title"]])
-        notif.main_window.setWindowTitle.assert_called_once_with("Title")
+        notif._editor.flush.side_effect = RuntimeError("boom")
+        notif._h__redraw(["flush", None], ["option_set", ["guifont", "Mono:h10"]])
+        notif.main_window.set_editor_font.assert_called_once_with("Mono", 10.0)
         assert "Crash" in logs.error
 
     def test_multiple_submethods_all_dispatched(self, notif):
         """All submethods in one _h__redraw() call are dispatched in order."""
         notif._h__redraw(["flush", None], ["flush", None])
-        assert notif.text_display.flush.call_count == 2
+        assert notif._editor.flush.call_count == 2
 
 
 class TestNvimNotificationsHandlers:
 
     def test_modified_changed(self, notif):
-        """Calls main_window.set_buffer_state with is_modified."""
-        notif._h__modified_changed(True)
-        notif.main_window.set_buffer_state.assert_called_once_with(is_modified=True)
+        """A modified change for a known window marks that window's tab."""
+        nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        notif._h__modified_changed(5, True)
+        notif.main_window.set_tab_modified.assert_called_once_with(notif._entry, True)
 
-    def test_filepath_changed(self, notif):
-        """Calls main_window.set_buffer_state with filepath."""
-        notif._h__filepath_changed("/some/path")
-        notif.main_window.set_buffer_state.assert_called_once_with(filepath="/some/path")
+    def test_window_buffer_known_window(self, notif):
+        """Buffer info for a known window records the buffer and refreshes the tab."""
+        nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        notif._h__window_buffer(5, 7, "/some/path")
+        assert nvim_notifications.registry.get(bufnr=7) is notif._entry
+        assert notif._entry.filepath == "/some/path"
+        notif.main_window.refresh_tab.assert_called_once_with(notif._entry)
+
+    def test_window_buffer_pending_for_unknown_window(self, notif):
+        """Buffer info for a not-yet-known window is stashed until its win_pos arrives."""
+        notif._h__window_buffer(99, 7, "/some/path")
+        notif.main_window.refresh_tab.assert_not_called()
+        assert notif._pending_buffers[99] == (7, "/some/path")
 
 
 class TestNvimNotificationsRedrawHandlers:
@@ -136,40 +159,51 @@ class TestNvimNotificationsRedrawHandlers:
     def test_flush(self, notif):
         """Calls text_display.flush()."""
         notif._n_redraw__flush(None)
-        notif.text_display.flush.assert_called_once()
+        notif._editor.flush.assert_called_once()
 
     def test_grid_clear(self, notif):
-        """Calls text_display.clear()."""
+        """A window grid routes clear() to the editor display."""
+        notif._n_redraw__grid_clear([2])
+        notif._editor.clear.assert_called_once()
+
+    def test_grid_clear_global_grid_routes_to_statusline(self, notif):
+        """The global grid (1) is rendered by the statusline strip, not the editor."""
         notif._n_redraw__grid_clear([1])
-        notif.text_display.clear.assert_called_once()
+        notif.statusline_display.clear.assert_called_once()
+        notif._editor.clear.assert_not_called()
 
     def test_grid_cursor_goto(self, notif):
-        """Calls text_display.set_cursor(row, col)."""
-        notif._n_redraw__grid_cursor_goto([1, 5, 10])
-        notif.text_display.set_cursor.assert_called_once_with(5, 10)
+        """A window grid routes set_cursor(row, col) to the editor display."""
+        notif._n_redraw__grid_cursor_goto([2, 5, 10])
+        notif._editor.set_cursor.assert_called_once_with(5, 10)
 
     def test_grid_line_single(self, notif):
         """Calls text_display.write_grid for a single line item."""
-        notif._n_redraw__grid_line([1, 3, 0, [["a", 1]], False])
-        notif.text_display.write_grid.assert_called_once_with(3, 0, [["a", 1]])
+        notif._n_redraw__grid_line([2, 3, 0, [["a", 1]], False])
+        notif._editor.write_grid.assert_called_once_with(3, 0, [["a", 1]])
 
     def test_grid_line_multiple(self, notif):
         """Calls text_display.write_grid once per line item."""
         notif._n_redraw__grid_line(
-            [1, 3, 0, [["a", 1]], False],
-            [1, 4, 2, [["b", 1]], False],
+            [2, 3, 0, [["a", 1]], False],
+            [2, 4, 2, [["b", 1]], False],
         )
-        assert notif.text_display.write_grid.call_count == 2
+        assert notif._editor.write_grid.call_count == 2
 
     def test_grid_resize(self, notif):
-        """Calls text_display.resize_view with (width, height)."""
-        notif._n_redraw__grid_resize([1, 80, 24])
-        notif.text_display.resize_view.assert_called_once_with((80, 24))
+        """A window grid routes resize_view((width, height)) to the editor display."""
+        notif._n_redraw__grid_resize([2, 80, 24])
+        notif._editor.resize_view.assert_called_once_with((80, 24))
 
     def test_grid_scroll(self, notif):
         """Calls text_display.scroll with the correct row and column arguments."""
-        notif._n_redraw__grid_scroll([1, 0, 24, 0, 80, 3, 0])
-        notif.text_display.scroll.assert_called_once_with((0, 24, 3), (0, 80, 0))
+        notif._n_redraw__grid_scroll([2, 0, 24, 0, 80, 3, 0])
+        notif._editor.scroll.assert_called_once_with((0, 24, 3), (0, 80, 0))
+
+    def test_grid_scroll_multiple(self, notif):
+        """Several scroll ops batched in one redraw are all applied."""
+        notif._n_redraw__grid_scroll([2, 0, 20, 0, 80, 1, 0], [2, 16, 20, 0, 80, -1, 0])
+        assert notif._editor.scroll.call_count == 2
 
     def test_hl_attr_define(self, notif, mocker):
         """Stores highlight attributes in structs and cleans the cache."""
@@ -187,10 +221,10 @@ class TestNvimNotificationsRedrawHandlers:
         mock_clean.assert_called_once_with("hl-groups")
 
     def test_mode_change(self, notif):
-        """Looks up mode info in structs and calls text_display.change_mode."""
+        """Looks up mode info in structs and hands it to the editor layer (main_window)."""
         notif.structs["mode-info"] = {"normal": {"cursor_shape": "block"}}
         notif._n_redraw__mode_change(["normal", 0])
-        notif.text_display.change_mode.assert_called_once_with({"cursor_shape": "block"})
+        notif.main_window.set_editor_mode.assert_called_once_with({"cursor_shape": "block"})
 
     def test_mode_info_set(self, notif, mocker):
         """Populates structs['mode-info'] stripping name/short_name, and cleans cache."""
@@ -209,15 +243,15 @@ class TestNvimNotificationsRedrawHandlers:
         notif._n_redraw__mouse_off(None)
 
     def test_option_set_without_guifont(self, notif):
-        """Updates options dict without calling text_display.set_font."""
+        """Updates options dict without touching the editor font."""
         notif._n_redraw__option_set(["arabicshape", True])
         assert notif.options["arabicshape"] is True
-        notif.text_display.set_font.assert_not_called()
+        notif.main_window.set_editor_font.assert_not_called()
 
     def test_option_set_with_guifont(self, notif):
-        """Updates options and calls text_display.set_font(name, size)."""
+        """Updates options and hands the font to the editor layer (main_window)."""
         notif._n_redraw__option_set(["guifont", "Monospace:h14"])
-        notif.text_display.set_font.assert_called_once_with("Monospace", 14.0)
+        notif.main_window.set_editor_font.assert_called_once_with("Monospace", 14.0)
 
     def test_set_icon_empty_no_warning(self, notif, logs):
         """set_icon with an empty icon does not log a warning."""
@@ -229,13 +263,137 @@ class TestNvimNotificationsRedrawHandlers:
         notif._n_redraw__set_icon(["myicon"])
         assert "set icon" in logs.warning
 
-    def test_set_title(self, notif):
-        """Calls main_window.setWindowTitle with the given title."""
+    def test_set_title_is_ignored(self, notif):
+        """set_title is ignored: the editor layer manages each window's title itself."""
         notif._n_redraw__set_title(["My Editor"])
-        notif.main_window.setWindowTitle.assert_called_once_with("My Editor")
+        notif.main_window.setWindowTitle.assert_not_called()
 
     def test_win_viewport(self, notif):
-        """Calls call_async with adjust_viewport and the correct arguments."""
-        notif._n_redraw__win_viewport([1, {}, 10, 50, 25, 5, 100, 3])
+        """Routes adjust_viewport to the pane of the window grid, with the right arguments."""
+        notif._n_redraw__win_viewport([2, {}, 10, 50, 25, 5, 100, 3])
         nvim_notifications.call_async.assert_called_once_with(
-            notif.main_window.adjust_viewport, 10, 50, 100, 5)
+            notif._pane.adjust_viewport, 10, 50, 100, 5)
+
+
+class TestGridRegistry:
+
+    def test_global_grid_is_global(self):
+        """Grid 1 is always classified as the global grid."""
+        assert GridRegistry().get_kind_by_grid(1) == "global"
+
+    def test_unknown_grid_is_a_window(self):
+        """Any grid that is neither global nor the message grid is a window."""
+        assert GridRegistry().get_kind_by_grid(2) == "window"
+
+    def test_message_grid_is_classified(self):
+        """A grid registered via set_message_grid is classified as the message grid."""
+        reg = GridRegistry()
+        reg.set_message_grid(3)
+        assert reg.get_kind_by_grid(3) == "message"
+        assert reg.get_kind_by_grid(2) == "window"
+
+    def test_add_grid_creates_entry_and_indexes_pane(self):
+        """add_grid creates an entry backed by the given pane and indexes it by pane."""
+        reg = GridRegistry()
+        pane = object()
+        entry = reg.add_grid(2, pane)
+        assert entry.grid_id == 2
+        assert entry.pane is pane
+        assert reg.get(grid_id=2) is entry
+        assert reg.get(pane=pane) is entry
+
+    def test_set_win_direct_lookup(self):
+        """set_win indexes the window id so get(win_id=...) resolves it without iterating."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.add_grid(4, object())
+        reg.set_win(2, 5)
+        reg.set_win(4, 9)
+        assert reg.get(win_id=5).grid_id == 2
+        assert reg.get(win_id=9).grid_id == 4
+        assert reg.get(win_id=123) is None
+
+    def test_set_win_replaces_previous_id(self):
+        """Updating a grid's window id drops the stale reverse lookup."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.set_win(2, 5)
+        reg.set_win(2, 8)
+        assert reg.get(win_id=5) is None
+        assert reg.get(win_id=8).grid_id == 2
+
+    def test_set_buffer_records_buffer_and_path(self):
+        """set_buffer stores bufnr/filepath and indexes the owning grid by bufnr."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.set_buffer(2, 7, "/some/path")
+        assert reg.get(grid_id=2).bufnr == 7
+        assert reg.get(grid_id=2).filepath == "/some/path"
+        assert reg.get(bufnr=7).grid_id == 2
+
+    def test_set_buffer_keeps_first_owner(self):
+        """A second grid showing the same buffer does not steal ownership of the bufnr index."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.add_grid(4, object())
+        reg.set_buffer(2, 7, "/p")
+        reg.set_buffer(4, 7, "/p")
+        assert reg.get(bufnr=7).grid_id == 2
+
+    def test_get_by_filepath(self):
+        """get(filepath=...) returns the entry showing the filepath, or None."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.add_grid(4, object())
+        reg.set_buffer(4, 9, "/some/path")
+        assert reg.get(filepath="/some/path").grid_id == 4
+        assert reg.get(filepath="/nope") is None
+
+    def test_get_by_pane(self):
+        """get(pane=...) returns the entry backed by the pane, or None for unknown/None."""
+        reg = GridRegistry()
+        pane = object()
+        entry = reg.add_grid(2, pane)
+        assert reg.get(pane=pane) is entry
+        assert reg.get(pane=object()) is None
+        assert reg.get(pane=None) is None
+
+    def test_get_required_returns_the_entry_when_found(self):
+        """get_required() behaves like get() when the entry exists."""
+        reg = GridRegistry()
+        entry = reg.add_grid(2, object())
+        assert reg.get_required(grid_id=2) is entry
+
+    def test_get_required_asserts_when_missing(self):
+        """get_required() raises (instead of returning None) when nothing matches."""
+        reg = GridRegistry()
+        with pytest.raises(AssertionError):
+            reg.get_required(grid_id=2)
+
+    def test_records_lists_all_windows(self):
+        """records() returns every window grid record."""
+        reg = GridRegistry()
+        reg.add_grid(2, object())
+        reg.add_grid(4, object())
+        assert {r.grid_id for r in reg.get_all_entries()} == {2, 4}
+
+    def test_forget_message_grid(self):
+        """Forgetting the message grid reverts its classification to window."""
+        reg = GridRegistry()
+        reg.set_message_grid(3)
+        reg.forget_grid(3)
+        assert reg.get_kind_by_grid(3) == "window"
+        assert reg.message_grid is None
+
+    def test_forget_window_drops_all_lookups(self):
+        """Forgetting a window grid drops its win, buffer, and pane reverse lookups."""
+        reg = GridRegistry()
+        pane = object()
+        reg.add_grid(2, pane)
+        reg.set_win(2, 5)
+        reg.set_buffer(2, 7, "/p")
+        reg.forget_grid(2)
+        assert reg.get(grid_id=2) is None
+        assert reg.get(win_id=5) is None
+        assert reg.get(bufnr=7) is None
+        assert reg.get(pane=pane) is None

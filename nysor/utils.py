@@ -7,6 +7,8 @@
 import asyncio
 import logging
 
+from PyQt6.QtWidgets import QMessageBox
+
 logger = logging.getLogger(__name__)
 
 
@@ -42,3 +44,14 @@ def call_async(async_function, *args, **kwargs):
 
     # plan the cleanup
     task.add_done_callback(_future_cleanup)
+
+
+class AsyncQMessageBox(QMessageBox):
+    """A message box that provides an async wait."""
+
+    async def wait(self):
+        """Async-friendly wait."""
+        answered = asyncio.Event()
+        self.finished.connect(lambda _result: answered.set())
+        self.open()  # non-blocking, so the async loop keeps running while the user decides
+        await answered.wait()

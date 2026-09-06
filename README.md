@@ -62,13 +62,22 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 
 These are the items lousely grouped to get there:
 
+
 **For 0.7:**
+- MULTIWINDOWS!!!
+    - quality check
+    - unit tests?
+
+**For 0.8:**
+- fix vsplit / hsplit
 - allow double-level logging (user selected to terminal, debug to a file if configured)
 - FIXME.94 allow logging system to use `logger.trace`
+- Improve swarm discover latency
+- font size with ctrl-+/-
+- docs/2026-08-24-optimizations.md
 
 
 **For 1.0:**
-
 - Think about "distribution"
     - upload it to PyPI and check `uvx` and `fades` work to run it
     - package it with `pyempaq`
@@ -83,11 +92,6 @@ The path after that is less descriptive. The following are the big items I want 
 - add a treeview in the left of the window
     - simple, showing the directory where the process is run
     - if double click in a file, it should open a new window/tab with the new buffer
-- support multiple buffers open
-    - FIXME.90
-    - switch back and forward clicking on tabs
-    - when going back to a tab, it should check if underneath file changed
-    - support closing properly, each tab or the whole program, asking for the buffers that are not properly saved
 - split command bar / messages
     - try to separate, if possible, the command bar from Neovim's grid itself
         - add better history and ways to search/filter previous commands
@@ -99,8 +103,6 @@ The path after that is less descriptive. The following are the big items I want 
     https://neovim.io/doc/user/api-ui-events/#ui-messages
 
 **For version 3:**
-- it should open more than a file if it's given in the command line
-    - each file should be a separate window in the "right pane zone"
 - double clicking in the tree view should also edit the file
 - when open from a terminal, the layout should change according to the indicated parameters
     - if it's one or more files, open them as (multiple) windows, without a treeview
@@ -131,9 +133,9 @@ The path after that is less descriptive. The following are the big items I want 
 
 # What about Windows?
 
-Windows is tricky. I want Nysor to run in Windows, but it's not my main platform, and I don't enjoy overcoming the the issues there.
+Windows is tricky. I want Nysor to run in Windows, but it's not my main platform, and I don't enjoy overcoming the issues there.
 
-We would need a champion to take the project there. Somebody that would want for Nysor to work in Windows and push it to make it possible. Are you that person? *Let's talk*.
+We would need a champion to take the project in that platform. Somebody that would want for Nysor to work in Windows and push it to make it possible. Are you that person? *Let's talk*.
 
-I started [this branch](https://github.com/facundobatista/nysor/tree/get-win-back) that solves the network/process details of running Neovim in Windows, but there are other glitches that need to be understood and fixed. Check that out, and send me a message if you are interested in this. Thanks in advance!
+I started [this branch](https://github.com/facundobatista/nysor/tree/get-win-back) that solves the network/process details of running Neovim in Windows, but there are other glitches that need to be understood and fixed. Check that out, and send me a message if you are interested in this endeavour. Thanks in advance!
 

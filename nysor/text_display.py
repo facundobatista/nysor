@@ -21,13 +21,13 @@ from PyQt6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
-    QResizeEvent,
     QWheelEvent,
 )
 from PyQt6.QtCore import QPointF, Qt, QRectF, QSize
 
 from nysor.logical_lines import LogicalLines, CharFormat, CharUnderline
 from nysor.logtools import log_notdone
+from nysor.nvim_notifications import registry
 
 logger = logging.getLogger(__name__)
 
@@ -90,13 +90,19 @@ MouseButton = Qt.MouseButton
 class BaseDisplay(QWidget):
     """Base widget to isolate as much as possible Qt itself from the Text handling."""
 
-    def __init__(self):
+    def __init__(self, interactive=True):
         super().__init__()
         self.widget_size = QSize(100, 100)  # default valid pseudo-useful value
-        self.setMouseTracking(True)
 
-        # get *all* keyboard events in this widget
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # a display-only widget (e.g. the message strip) does not take focus, does not
+        # forward keyboard/mouse to Neovim, and does not drive Neovim resizing
+        self._interactive = interactive
+        if interactive:
+            self.setMouseTracking(True)
+            # get *all* keyboard events in this widget
+            self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        else:
+            self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 
     def focusNextPrevChild(self, _):
         """Do not allow to "navigate" widgets out of here."""
@@ -106,13 +112,10 @@ class BaseDisplay(QWidget):
         """Provide the desired size for the widget."""
         return self.widget_size
 
-    def resizeEvent(self, event: QResizeEvent):
-        """Hook-up in the event to trigger internal resizing."""
-        super().resizeEvent(event)
-        self.window_resize()
-
     def keyPressEvent(self, event: QKeyEvent):
         """Get all keyboard events."""
+        if not self._interactive:
+            return
         key_text = event.text()
         key = event.key()
         modifiers = event.modifiers()
@@ -155,6 +158,8 @@ class BaseDisplay(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent):
         """Handle a button mouse that was pressed."""
+        if not self._interactive:
+            return
         button = event.button()
 
         if button is MouseButton.RightButton:
@@ -169,16 +174,20 @@ class BaseDisplay(QWidget):
 
         action = "press"
         modifier = self._get_button_modifiers(event)
-        grid = 0  # FIXME.90: may change when multi-edit?
+        # only interactive editor displays send mouse input, and by the time one can be clicked
+        # its window is registered -- a missing mapping would be a broken invariant
+        grid_id = registry.get_required(pane=self.pane).grid_id
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
         self.main_window.nvi.future_request(
-            "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
         )
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         """Handle a button mouse that was released."""
+        if not self._interactive:
+            return
         button = event.button()
         if button is MouseButton.RightButton:
             self.main_window.present_context_window()
@@ -193,12 +202,14 @@ class BaseDisplay(QWidget):
 
         action = "release"
         modifier = self._get_button_modifiers(event)
-        grid = 0  # FIXME.90: may change when multi-edit?
+        # only interactive editor displays send mouse input, and by the time one can be clicked
+        # its window is registered -- a missing mapping would be a broken invariant
+        grid_id = registry.get_required(pane=self.pane).grid_id
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
         self.main_window.nvi.future_request(
-            "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
         )
 
         # this will make Neovim to yank selection to the "X11 main selection"
@@ -206,6 +217,8 @@ class BaseDisplay(QWidget):
 
     def mouseMoveEvent(self, event: QMouseEvent):
         """Handle when the mouse is moving; we only care about this for left button dragging."""
+        if not self._interactive:
+            return
         button = event.buttons()
         if button in (MouseButton.NoButton, MouseButton.RightButton, MouseButton.MiddleButton):
             # ignore the event if not dragging with left button
@@ -215,12 +228,14 @@ class BaseDisplay(QWidget):
         button_name = "left"
         action = "drag"
         modifier = self._get_button_modifiers(event)
-        grid = 0  # FIXME.90: may change when multi-edit?
+        # only interactive editor displays send mouse input, and by the time one can be clicked
+        # its window is registered -- a missing mapping would be a broken invariant
+        grid_id = registry.get_required(pane=self.pane).grid_id
 
         pos = event.position()
         row, col = self._get_grid_cell(pos.x(), pos.y())
         self.main_window.nvi.future_request(
-            "nvim_input_mouse", button_name, action, modifier, grid, row, col
+            "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
         )
 
     def wheelEvent(self, event: QWheelEvent):
@@ -233,25 +248,29 @@ class BaseDisplay(QWidget):
         not to be "too nervous". Note that typical wheel of standard mouses will
         inform a delta of 120.
         """
+        if not self._interactive:
+            return
         button_name = "wheel"
         qpoint = event.angleDelta()
         dx, dy = qpoint.x(), qpoint.y()
         trigger_limit = 10
         row, col = 0, 0  # seems to be ignored
-        grid = 0  # FIXME.90: may change when multi-edit?
+        # only interactive editor displays send mouse input, and by the time one can be clicked
+        # its window is registered -- a missing mapping would be a broken invariant
+        grid_id = registry.get_required(pane=self.pane).grid_id
 
         if abs(dx) > trigger_limit:
             action = "right" if dx > 0 else "left"
             modifier = self._get_button_modifiers(event)
             self.main_window.nvi.future_request(
-                "nvim_input_mouse", button_name, action, modifier, grid, row, col
+                "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
             )
 
         if abs(dy) > trigger_limit:
             action = "up" if dy > 0 else "down"
             modifier = self._get_button_modifiers(event)
             self.main_window.nvi.future_request(
-                "nvim_input_mouse", button_name, action, modifier, grid, row, col
+                "nvim_input_mouse", button_name, action, modifier, grid_id, row, col
             )
 
     def _get_grid_cell(self, x: int, y: int):
@@ -281,10 +300,15 @@ class TextDisplay(BaseDisplay):
     # cache to hold chars drawing widths; cleaned when font changes
     _char_drawing_widths_cache = {}
 
-    def __init__(self, main_window):
-        super().__init__()
+    def __init__(self, main_window, interactive=True, pane=None):
+        super().__init__(interactive=interactive)
         self.main_window = main_window
+        # the EditorPane owning this display (None for the display-only strips); passed at
+        # construction so it is always set with the right value
+        self.pane = pane
         self.initial_resizing_done = False
+        # last (cols, rows) we told Neovim this window's grid should be, to skip redundant resizes
+        self._last_grid_size = None
 
         # some defaults
         self.font_size = None
@@ -296,16 +320,26 @@ class TextDisplay(BaseDisplay):
         self.cursor_painter = lambda *a: None
         self.need_grid_clearing = True
 
+        # first grid row to paint at the top of the widget; non-zero lets a strip render a
+        # sub-range of a larger grid (e.g. the statusline strip shows only grid 1's status row)
+        self.view_origin_row = 0
+
         # cache to hold conversions between Neovim's highlight info and Qt formats
         self.nvimhl_to_qtfmt = {}
         # cache to hold mode_info processed structures
         self.mode_info_structs = {}
 
-    def window_resize(self):
-        """Inform Neovim of new window size."""
-        cols = max(MIN_COLS_ROWS, int(self.width() / self.font_size.width))
-        rows = max(MIN_COLS_ROWS, int(self.height() / self.font_size.height))
-        self.main_window.nvi.future_request("nvim_ui_try_resize", cols, rows)
+    def resizeEvent(self, event):
+        """Ask Neovim to resize this window's grid to match the widget's new on-screen size.
+
+        Only interactive editor displays do this (the strips are display-only). Each editor pane
+        drives its OWN grid via nvim_ui_try_resize_grid, so a tab and a detached window can have
+        different sizes in Neovim; per-grid resizes are independent (they do not touch the global
+        grid), so this cannot feed back into the strip/global resize loop.
+        """
+        super().resizeEvent(event)
+        if self._interactive:
+            self.main_window.resize_editor_grid(self)
 
     def handle_keyboard(self, key_text, key, modifiers):
         """Handle keyboard events."""
@@ -460,12 +494,19 @@ class TextDisplay(BaseDisplay):
         """Paint (draw) the grid."""
         cell_height = self.font_size.height
 
+        # fill the whole widget with the default background first, so the leftover border (the
+        # widget is rarely an exact multiple of the cell size) blends in instead of showing the
+        # bare widget colour -- visible e.g. in a detached window that is not background-coloured
+        default_colors = self.main_window.nvim_notifs.structs.get("default_colors")
+        if default_colors is not None:
+            painter.fillRect(self.rect(), QColor(default_colors["background"]))
+
         # paint all backgrounds first!
         for row in range(self.display_size[1]):
             base_y = row * cell_height
             base_x = 0
 
-            logical_line = self.lines.get(row)
+            logical_line = self.lines.get(self.view_origin_row + row)
             if logical_line is None:
                 # no logical line, fill with background default color; note that this value is not
                 # ready at the very start, but it's there soon enough
@@ -492,7 +533,7 @@ class TextDisplay(BaseDisplay):
             base_y = row * cell_height
             base_x = 0
 
-            logical_line = self.lines.get(row)
+            logical_line = self.lines.get(self.view_origin_row + row)
             if logical_line is None:
                 continue
 
@@ -524,8 +565,8 @@ class TextDisplay(BaseDisplay):
                         painter, logical_char, base_x, slot_width, base_y, cell_height,
                     )
 
-                # the cursor, if that is the position
-                if col == cursor_col and row == cursor_row:
+                # the cursor, if that is the position (cursor row is in grid coordinates)
+                if col == cursor_col and self.view_origin_row + row == cursor_row:
                     self.cursor_painter(painter, base_x, base_y, slot_width - 1)
 
                 base_x += slot_width
