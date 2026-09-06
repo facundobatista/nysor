@@ -63,11 +63,6 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 These are the items lousely grouped to get there:
 
 
-**For 0.7:**
-- MULTIWINDOWS!!!
-    - quality check
-    - unit tests?
-
 **For 0.8:**
 - fix vsplit / hsplit
 - allow double-level logging (user selected to terminal, debug to a file if configured)
