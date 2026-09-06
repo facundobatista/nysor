@@ -1,0 +1,61 @@
+# Steps
+
+Release early, release often. Don't be lazy.
+
+To use this doc: just replace X.Y with the major.minor.patch version of
+the release. The sequence of commands below should be good to copy and
+paste, but please pay attention to details!
+
+- ensure `main` is clean, and then:
+
+    git tag X.Y
+    git push --tags
+
+
+- create release notes after all main changes from last tag
+
+    git log --first-parent main --decorate > release-X.Y.txt
+
+
+- build the tarball
+
+    rm -rf dist/
+    fades -d build -m build
+
+
+- release in Github
+
+    xdg-open https://github.com/facundobatista/nysor/tags
+
+    You should see all project tags, the top one should be this release.
+    In the menu at right of the tag tag you just created, choose 'create
+    release'. Copy the release notes into the release description.
+
+    Attach the `dist/` files
+
+    Click on "Publish release"
+
+
+- release to PyPI
+
+    fades --check-updates -d twine -x twine upload --verbose dist/*
+
+
+- commit, push
+
+
+# Message
+
+**Nysor 0.6 released!**
+
+Nysor is yet another graphical interface for Neovim. Written in Python, with Qt.
+
+The main improvement in this version is that you can make it read content from stdin if instead of a path you pass '-'. E.g.:
+
+`grep facu /etc/passwd | nysor -`
+
+Try it:
+
+`uvx nysor`
+
+Full details in the release: https://github.com/facundobatista/nysor/releases/tag/X.Y

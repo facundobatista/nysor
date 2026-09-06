@@ -65,10 +65,12 @@ These are the items lousely grouped to get there:
 
 **For 0.8:**
 - fix vsplit / hsplit
-- allow double-level logging (user selected to terminal, debug to a file if configured)
-- FIXME.94 allow logging system to use `logger.trace`
-- Improve swarm discover latency
 - font size with ctrl-+/-
+- Improve swarm discover latency
+
+**For 0.9:**
+- FIXME.94 allow logging system to use `logger.trace`
+- allow double-level logging (user selected to terminal, debug to a file if configured)
 - docs/2026-08-24-optimizations.md
 
 
