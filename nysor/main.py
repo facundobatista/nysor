@@ -94,6 +94,10 @@ MODIFIED_INDICATOR = "●"
 # the integration test suite (tests/integration/), so this is the one shared source of truth
 NVIM_ENV_VAR = "NYSOR_NVIM"
 
+# resolved relative to this file (not the current working directory), so it works both running
+# from a checkout and from an installed package run from anywhere
+ICON_PATH = os.path.join(os.path.dirname(__file__), "imgs", "icon-1024.png")
+
 
 def get_nysor_version():
     """Return the Nysor version, from the installed metadata, or fallback to git."""
@@ -446,7 +450,7 @@ class MainMenu:
         msg = _ABOUT_TEXT.format(version=self._app.nysor_version)
         dlg = QMessageBox(self._host)
         dlg.setTextFormat(Qt.TextFormat.RichText)
-        dlg.setIconPixmap(QIcon("nysor/imgs/icon-1024.png").pixmap(128, 128))
+        dlg.setIconPixmap(QIcon(ICON_PATH).pixmap(128, 128))
         dlg.setWindowTitle("About Nysor")
         dlg.setText(msg)
         dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
@@ -682,7 +686,7 @@ class MainApp(QMainWindow):
 
     def __init__(self, version, loop, paths_to_open, nvim_exec_path):
         super().__init__()
-        self.setWindowIcon(QIcon("nysor/imgs/icon-1024.png"))
+        self.setWindowIcon(QIcon(ICON_PATH))
         self.nysor_version = version
 
         self._closing = 0
