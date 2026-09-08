@@ -23,15 +23,15 @@ Nysor is mainly a GUI with an editor inside. You run it, optionally indicating o
   <p><em>Opening two files (the clear background is because of my Neovim config, not a GUI decision)</em></p>
 </div>
 
-- *Real Neovim backend, not an emulation*: Nysor doesn't reinvent Vim/Neovim or mimic they keybindings: it runs your actual Neovim underneath, with your config, your plugins, your LSP, and your keymaps exactly as they are today.
+- **Real Neovim backend, not an emulation**: Nysor doesn't reinvent Vim/Neovim or mimic they keybindings: it runs your actual Neovim underneath, with your config, your plugins, your LSP, and your keymaps exactly as they are today.
 
-- *Real tabs, each backed by its own Neovim window*: Open several files and each one lives in its own tab, with its own scroll position, its own "modified" state, and its own identity. These aren't simulated panes, they're real Neovim windows rendered as native Qt tabs.
+- **Real tabs, each backed by its own Neovim window**: Open several files and each one lives in its own tab, with its own scroll position, its own "modified" state, and its own identity. These aren't simulated panes, they're real Neovim windows rendered as native Qt tabs.
 
-- *Pull a tab out into its own window*: Want two files side by side? Drag a tab off the bar (or use the menu) and it becomes its own OS window, just like tearing a tab off a browser. Snap it back whenever you want.
+- **Pull a tab out into its own window**: Want two files side by side? Drag a tab off the bar (or use the menu) and it becomes its own OS window, just like tearing a tab off a browser. Snap it back whenever you want.
 
-- *Your work is never silently at risk*: Closing a tab with unsaved changes always asks first; and if a file changes on disk while you have it open, Nysor flags it the moment you switch back to that tab. Nothing gets overwritten quietly, yours or anyone else's.
+- **Your work is never silently at risk**: Closing a tab with unsaved changes always asks first; and if a file changes on disk while you have it open, Nysor flags it the moment you switch back to that tab. Nothing gets overwritten quietly, yours or anyone else's.
 
-- *Open the same file twice, get no duplicates*: If a file is already open (in this Nysor instance or another one running alongside it), opening it again doesn't spawn a conflicting copy, it just takes you straight to the tab or window where it's already open, avoiding the classic mess of two edits fighting over the same file.
+- **Open the same file twice, get no duplicates**: If a file is already open (in this Nysor instance or another one running alongside it), opening it again doesn't spawn a conflicting copy, it just takes you straight to the tab or window where it's already open, avoiding the classic mess of two edits fighting over the same file.
 
 
 ## How to run it?
