@@ -10,12 +10,34 @@ on:
   workflow_dispatch:
 
 jobs:
+  generate-matrix:
+    # single source of truth for approved Neovim versions: nysor/nvim_versions.py (also used by
+    # the app itself at startup, see MainApp.setup_nvim) -- read here instead of duplicating the
+    # list in this file, so they can never drift apart
+    runs-on: ubuntu-24.04
+    outputs:
+      nvim-versions: ${{ steps.versions.outputs.versions }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Read approved Neovim versions
+        id: versions
+        run: |
+          VERSIONS=$(python3 -c "
+          import json
+          from nysor.nvim_versions import APPROVED_NVIM_VERSIONS
+          print(json.dumps(APPROVED_NVIM_VERSIONS))
+          ")
+          echo "versions=$VERSIONS" >> "$GITHUB_OUTPUT"
+
   run-tests:
+    needs: generate-matrix
     strategy:
       matrix:
         os: [ubuntu-24.04, macos-15]
         python-version: ["3.12", "3.13", "3.14"]
-        nvim-version: ["0.12.2", "0.12.5"]
+        nvim-version: ${{ fromJson(needs.generate-matrix.outputs.nvim-versions) }}
 
     runs-on: ${{ matrix.os }}
     steps:

@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,7 @@ from nysor import swarm
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications, registry
+from nysor.nvim_versions import APPROVED_NVIM_VERSIONS
 from nysor.text_display import TextDisplay, MIN_COLS_ROWS
 from nysor.utils import call_async, AsyncQMessageBox
 
@@ -1026,6 +1028,21 @@ class MainApp(QMainWindow):
         dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
         dlg.open()  # non-blocking; just informational
 
+    def _show_unapproved_nvim_version(self, version, path):
+        """Warn that the running Neovim is not in the list nysor is verified against."""
+        approved = ", ".join(APPROVED_NVIM_VERSIONS)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Icon.Information)
+        dlg.setWindowTitle("Unverified Neovim version")
+        dlg.setText(
+            f"Running Neovim {version} (from {path!r}), which is not in the list of versions "
+            f"nysor is verified against ({approved}).\n\n"
+            "Things may not work correctly. Please report any issues you hit, so we can add "
+            "support for this version too. Thanks!"
+        )
+        dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dlg.open()  # non-blocking; just informational
+
     def close_pane(self, pane):
         """Close a specific editor pane's buffer, prompting on unsaved changes (see close_tab).
 
@@ -1415,6 +1432,13 @@ class MainApp(QMainWindow):
         """
         await self.nvi.setup_completed_event.wait()
 
+        if self.nvi.nvim_version not in APPROVED_NVIM_VERSIONS:
+            logger.info(
+                "Running Neovim {} (from {!r}), not in the list of versions nysor is verified "
+                "against: {}", self.nvi.nvim_version, self.nvi.nvim_exec_path,
+                APPROVED_NVIM_VERSIONS)
+            self._show_unapproved_nvim_version(self.nvi.nvim_version, self.nvi.nvim_exec_path)
+
         # attach the UI; multigrid gives each Neovim window (and the message area) its own
         # grid, which we route to separate displays (see NvimNotifications)
         nvim_config = {"ext_linegrid": True, "ext_multigrid": True}
@@ -1712,8 +1736,7 @@ def process_args(args):
             if path not in requested_paths:
                 requested_paths.append(path)
 
-    # resolve which nvim executable to use (if None NvimInterface falls back
-    # to "nvim" resolved via PATH)
+    # resolve which nvim executable to use
     if args.nvim is not None:
         logger.debug("Using nvim from --nvim: {!r}", args.nvim)
         nvim_exec_path = args.nvim
@@ -1721,7 +1744,9 @@ def process_args(args):
         nvim_exec_path = os.environ[NVIM_ENV_VAR]
         logger.debug("Using nvim from {} env var: {!r}", NVIM_ENV_VAR, nvim_exec_path)
     else:
-        nvim_exec_path = None
+        nvim_exec_path = shutil.which("nvim") or "nvim"
+        logger.debug(
+            "No --nvim/{} given; resolved via PATH to {!r}", NVIM_ENV_VAR, nvim_exec_path)
 
     return requested_paths, nvim_exec_path
 
