@@ -499,7 +499,7 @@ class NvimNotifications:
         for mode, _mode_idx in args:
             # we ignore the mode idx as we stored the modes in a dict using the name
             mode_info = self.structs["mode-info"][mode]
-            self.main_window.set_editor_mode(mode_info)
+            self.main_window.set_editor_mode(mode, mode_info)
 
     def _n_redraw__mode_info_set(self, *args):
         """Cursor mode definitions (may carry several)."""

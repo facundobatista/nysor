@@ -224,7 +224,8 @@ class TestNvimNotificationsRedrawHandlers:
         """Looks up mode info in structs and hands it to the editor layer (main_window)."""
         notif.structs["mode-info"] = {"normal": {"cursor_shape": "block"}}
         notif._n_redraw__mode_change(["normal", 0])
-        notif.main_window.set_editor_mode.assert_called_once_with({"cursor_shape": "block"})
+        notif.main_window.set_editor_mode.assert_called_once_with(
+            "normal", {"cursor_shape": "block"})
 
     def test_mode_info_set(self, notif, mocker):
         """Populates structs['mode-info'] stripping name/short_name, and cleans cache."""

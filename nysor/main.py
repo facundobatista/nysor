@@ -923,16 +923,25 @@ class MainApp(QMainWindow):
         self.message_display.set_font(name, size)
         self.statusline_display.set_font(name, size)
 
-    def set_editor_mode(self, mode_info):
+    def set_editor_mode(self, mode, mode_info):
         """Set the cursor mode for the ACTIVE editor, and remember it for new tabs.
 
         The mode setting (e.g. insert -> a bar cursor) belongs to Neovim's current
         window. New tabs pick up the remembered mode on build; a window picks it up
         again when it becomes active.
+
+        A 'cmdline_*' mode means the command line (rendered on the message grid, not a real
+        editor window) is the one being edited, so its own strip gets the cursor instead -- and
+        loses it again once a non-cmdline mode comes back, so a stale cmdline cursor position
+        does not linger visible after focus returns to a real editor window.
         """
         self._editor_mode = mode_info
         if self.text_display is not None:
             self.text_display.change_mode(mode_info)
+        if mode.startswith("cmdline"):
+            self.message_display.change_mode(mode_info)
+        else:
+            self.message_display.cursor_painter = lambda *a: None
 
     def build_editor_tab(self):
         """Create (or reuse) the editor pane for a new window, returning its display.
