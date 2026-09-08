@@ -14,6 +14,8 @@ import uuid
 
 import msgpack
 
+from nysor import nvim_versions
+
 # do not poll more frequently than these seconds
 POLL_FREEZE_PERIOD = 0.005
 
@@ -58,6 +60,7 @@ class NvimInterface:
     def __init__(self, nvim_exec_path, loop, notification_handler, quit_callback):
         self._loop = loop
         self._notif_handler = notification_handler
+        self._raw_nvim_version = None  # will be filled below in the setup
 
         # the event is to wait for process finalization when we receive the order to close it; at
         # all times the callback is called, as the finalization may be initiated by Neovim itself
@@ -117,10 +120,23 @@ class NvimInterface:
         for name, info in nvim_types.items():
             _EXT_TYPE_CODES[info["id"]] = name
 
-        version = api_metadata["version"]
-        self.nvim_version = "{major}.{minor}.{patch}".format(**version)
+        self._raw_nvim_version = api_metadata["version"]
+        self.nvim_version = "{major}.{minor}.{patch}".format(**self._raw_nvim_version)
         logger.info("Neovim API info: version {}", self.nvim_version)
         self.setup_completed_event.set()
+
+    def validate_working_version(self):
+        """Return True if the nvim version is approved."""
+        major = self._raw_nvim_version["major"]
+        minor = self._raw_nvim_version["minor"]
+        if (major, minor) in nvim_versions.APPROVED:
+            return True
+
+        patch = self._raw_nvim_version["patch"]
+        if (major, minor, patch) in nvim_versions.APPROVED:
+            return True
+
+        return False
 
     def _get_unique_sock_path(self):
         """Return an unique path, validating it's not in disk."""
