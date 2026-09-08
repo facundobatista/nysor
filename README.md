@@ -62,11 +62,6 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 
 These are the items lousely grouped to get there:
 
-**For 0.7.2:**
-- soportar 0.9.5
--
-
-
 **For 0.8:**
 - fix vsplit / hsplit
 - font size with ctrl-+/-
