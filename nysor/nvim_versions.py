@@ -8,4 +8,10 @@ Single source of truth for both the app's own startup check and the CI test matr
 dependency-free so that CI step can read it without installing the project first.
 """
 
-APPROVED_NVIM_VERSIONS = ["0.12.2", "0.12.5"]
+TO_TEST = [
+    "0.12.2",
+    "0.12.5",
+]
+APPROVED = [
+    (0, 12),
+]

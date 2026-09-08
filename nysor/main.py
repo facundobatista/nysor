@@ -40,11 +40,10 @@ from PyQt6.QtCore import Qt, QEvent, QSize, QTimer
 from PyQt6.QtGui import QIcon, QAction
 
 
-from nysor import swarm
+from nysor import swarm, nvim_versions
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications, registry
-from nysor.nvim_versions import APPROVED_NVIM_VERSIONS
 from nysor.text_display import TextDisplay, MIN_COLS_ROWS
 from nysor.utils import call_async, AsyncQMessageBox
 
@@ -1041,7 +1040,7 @@ class MainApp(QMainWindow):
 
     def _show_unapproved_nvim_version(self, version, path):
         """Warn that the running Neovim is not in the list nysor is verified against."""
-        approved = ", ".join(APPROVED_NVIM_VERSIONS)
+        approved = ", ".join(nvim_versions.APPROVED)
         dlg = QMessageBox(self)
         dlg.setIcon(QMessageBox.Icon.Information)
         dlg.setWindowTitle("Unverified Neovim version")
@@ -1443,11 +1442,11 @@ class MainApp(QMainWindow):
         """
         await self.nvi.setup_completed_event.wait()
 
-        if self.nvi.nvim_version not in APPROVED_NVIM_VERSIONS:
+        if not self.nvi.validate_working_version():
             logger.info(
                 "Running Neovim {} (from {!r}), not in the list of versions nysor is verified "
                 "against: {}", self.nvi.nvim_version, self.nvi.nvim_exec_path,
-                APPROVED_NVIM_VERSIONS)
+                nvim_versions.APPROVED)
             self._show_unapproved_nvim_version(self.nvi.nvim_version, self.nvi.nvim_exec_path)
 
         # attach the UI; multigrid gives each Neovim window (and the message area) its own

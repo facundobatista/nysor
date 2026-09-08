@@ -26,8 +26,8 @@ jobs:
         run: |
           VERSIONS=$(python3 -c "
           import json
-          from nysor.nvim_versions import APPROVED_NVIM_VERSIONS
-          print(json.dumps(APPROVED_NVIM_VERSIONS))
+          from nysor.nvim_versions import TO_TEST
+          print(json.dumps(TO_TEST))
           ")
           echo "versions=$VERSIONS" >> "$GITHUB_OUTPUT"
 
@@ -76,3 +76,12 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           pytest
+
+  tests-required:
+    needs: test
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check matrix result
+        run: |
+          # fail if any required test failed
