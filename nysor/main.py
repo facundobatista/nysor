@@ -61,6 +61,25 @@ Find here how to install Neovim:<br/>
 The <span style="font-family:monospace; color:green">nvim</span> executable should be in the system's PATH; alternatively you can indicate the path using the <span style="font-family:monospace; color:green">--nvim</span> parameter (or the <span style="font-family:monospace; color:green">NYSOR_NVIM</span> env var).
 """  # NOQA
 
+
+def _show_nvim_not_found_dialog(exc):
+    """Show the blocking 'Neovim not found' error dialog and exit.
+
+    Shared by the two points this can be detected: no --nvim/env var given and nothing on PATH
+    either (checked upfront in main(), before there is a MainApp to parent the dialog to), or an
+    explicitly given path that turned out to be wrong (NvimInterface's Popen call fails).
+    """
+    logger.error("Failed to start neovim interface: {!r}", exc)
+    dlg = QMessageBox()
+    dlg.setTextFormat(Qt.TextFormat.RichText)
+    dlg.setIcon(QMessageBox.Icon.Critical)
+    dlg.setWindowTitle("Startup Error")
+    dlg.setText(_NVIM_EXEC_NOT_FOUND_MSG.format(exc=exc))
+    dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+    dlg.exec()
+    exit(1)
+
+
 _ABOUT_TEXT = """
 <br/>
 <span style="font-size:+1"><b>Nysor</b> {version}</span><br/>
@@ -710,16 +729,8 @@ class MainApp(QMainWindow):
                 nvim_exec_path, loop, self.nvim_notifs.handler, self._quit_callback
             )
         except NeovimExecutableNotFound as exc:
-            logger.error("Failed to start neovim interface: {!r}", exc)
-            msg = _NVIM_EXEC_NOT_FOUND_MSG.format(exc=exc)
-            dlg = QMessageBox(self)
-            dlg.setTextFormat(Qt.TextFormat.RichText)
-            dlg.setIcon(QMessageBox.Icon.Critical)
-            dlg.setWindowTitle("Startup Error")
-            dlg.setText(msg)
-            dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
-            dlg.exec()
-            exit(1)
+            # this will *exit the app* completely
+            _show_nvim_not_found_dialog(exc)
 
         self._swarm = swarm.SwarmServer(loop, self._path_discover_cb)
         loop.create_task(self.setup_nvim(paths_to_open))
@@ -1744,7 +1755,10 @@ def process_args(args):
         nvim_exec_path = os.environ[NVIM_ENV_VAR]
         logger.debug("Using nvim from {} env var: {!r}", NVIM_ENV_VAR, nvim_exec_path)
     else:
-        nvim_exec_path = shutil.which("nvim") or "nvim"
+        nvim_exec_path = shutil.which("nvim")
+        if nvim_exec_path is None:
+            # nothing to try: no point passing a bogus "nvim" along for Popen to fail on later
+            raise NeovimExecutableNotFound("'nvim' not found on PATH")
         logger.debug(
             "No --nvim/{} given; resolved via PATH to {!r}", NVIM_ENV_VAR, nvim_exec_path)
 
@@ -1756,7 +1770,10 @@ async def main(event_loop, args, app_close_event):
     nysor_version = get_nysor_version()
     logger.info("Starting Nysor {}", nysor_version)
 
-    requested_paths, nvim_exec_path = process_args(args)
+    try:
+        requested_paths, nvim_exec_path = process_args(args)
+    except NeovimExecutableNotFound as exc:
+        _show_nvim_not_found_dialog(exc)  # exits the process
 
     if requested_paths != SPECIAL_STDIN_PATH and requested_paths:
         # ask the swarm about each path (concurrently) and
