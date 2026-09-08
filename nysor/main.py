@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -43,6 +44,7 @@ from nysor import swarm
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications, registry
+from nysor.nvim_versions import APPROVED_NVIM_VERSIONS
 from nysor.text_display import TextDisplay, MIN_COLS_ROWS
 from nysor.utils import call_async, AsyncQMessageBox
 
@@ -58,6 +60,25 @@ Find here how to install Neovim:<br/>
 <br/>
 The <span style="font-family:monospace; color:green">nvim</span> executable should be in the system's PATH; alternatively you can indicate the path using the <span style="font-family:monospace; color:green">--nvim</span> parameter (or the <span style="font-family:monospace; color:green">NYSOR_NVIM</span> env var).
 """  # NOQA
+
+
+def _show_nvim_not_found_dialog(exc):
+    """Show the blocking 'Neovim not found' error dialog and exit.
+
+    Shared by the two points this can be detected: no --nvim/env var given and nothing on PATH
+    either (checked upfront in main(), before there is a MainApp to parent the dialog to), or an
+    explicitly given path that turned out to be wrong (NvimInterface's Popen call fails).
+    """
+    logger.error("Failed to start neovim interface: {!r}", exc)
+    dlg = QMessageBox()
+    dlg.setTextFormat(Qt.TextFormat.RichText)
+    dlg.setIcon(QMessageBox.Icon.Critical)
+    dlg.setWindowTitle("Startup Error")
+    dlg.setText(_NVIM_EXEC_NOT_FOUND_MSG.format(exc=exc))
+    dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+    dlg.exec()
+    exit(1)
+
 
 _ABOUT_TEXT = """
 <br/>
@@ -708,16 +729,8 @@ class MainApp(QMainWindow):
                 nvim_exec_path, loop, self.nvim_notifs.handler, self._quit_callback
             )
         except NeovimExecutableNotFound as exc:
-            logger.error("Failed to start neovim interface: {!r}", exc)
-            msg = _NVIM_EXEC_NOT_FOUND_MSG.format(exc=exc)
-            dlg = QMessageBox(self)
-            dlg.setTextFormat(Qt.TextFormat.RichText)
-            dlg.setIcon(QMessageBox.Icon.Critical)
-            dlg.setWindowTitle("Startup Error")
-            dlg.setText(msg)
-            dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
-            dlg.exec()
-            exit(1)
+            # this will *exit the app* completely
+            _show_nvim_not_found_dialog(exc)
 
         self._swarm = swarm.SwarmServer(loop, self._path_discover_cb)
         loop.create_task(self.setup_nvim(paths_to_open))
@@ -1022,6 +1035,21 @@ class MainApp(QMainWindow):
         dlg.setText(
             f"{name!r} has unsaved changes, so its tab was kept open.\n"
             "Save it (or use a Neovim command like :w / :q!) before closing."
+        )
+        dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dlg.open()  # non-blocking; just informational
+
+    def _show_unapproved_nvim_version(self, version, path):
+        """Warn that the running Neovim is not in the list nysor is verified against."""
+        approved = ", ".join(APPROVED_NVIM_VERSIONS)
+        dlg = QMessageBox(self)
+        dlg.setIcon(QMessageBox.Icon.Information)
+        dlg.setWindowTitle("Unverified Neovim version")
+        dlg.setText(
+            f"Running Neovim {version} (from {path!r}), which is not in the list of versions "
+            f"nysor is verified against ({approved}).\n\n"
+            "Things may not work correctly. Please report any issues you hit, so we can add "
+            "support for this version too. Thanks!"
         )
         dlg.setStandardButtons(QMessageBox.StandardButton.Ok)
         dlg.open()  # non-blocking; just informational
@@ -1415,6 +1443,13 @@ class MainApp(QMainWindow):
         """
         await self.nvi.setup_completed_event.wait()
 
+        if self.nvi.nvim_version not in APPROVED_NVIM_VERSIONS:
+            logger.info(
+                "Running Neovim {} (from {!r}), not in the list of versions nysor is verified "
+                "against: {}", self.nvi.nvim_version, self.nvi.nvim_exec_path,
+                APPROVED_NVIM_VERSIONS)
+            self._show_unapproved_nvim_version(self.nvi.nvim_version, self.nvi.nvim_exec_path)
+
         # attach the UI; multigrid gives each Neovim window (and the message area) its own
         # grid, which we route to separate displays (see NvimNotifications)
         nvim_config = {"ext_linegrid": True, "ext_multigrid": True}
@@ -1712,8 +1747,7 @@ def process_args(args):
             if path not in requested_paths:
                 requested_paths.append(path)
 
-    # resolve which nvim executable to use (if None NvimInterface falls back
-    # to "nvim" resolved via PATH)
+    # resolve which nvim executable to use
     if args.nvim is not None:
         logger.debug("Using nvim from --nvim: {!r}", args.nvim)
         nvim_exec_path = args.nvim
@@ -1721,7 +1755,12 @@ def process_args(args):
         nvim_exec_path = os.environ[NVIM_ENV_VAR]
         logger.debug("Using nvim from {} env var: {!r}", NVIM_ENV_VAR, nvim_exec_path)
     else:
-        nvim_exec_path = None
+        nvim_exec_path = shutil.which("nvim")
+        if nvim_exec_path is None:
+            # nothing to try: no point passing a bogus "nvim" along for Popen to fail on later
+            raise NeovimExecutableNotFound("'nvim' not found on PATH")
+        logger.debug(
+            "No --nvim/{} given; resolved via PATH to {!r}", NVIM_ENV_VAR, nvim_exec_path)
 
     return requested_paths, nvim_exec_path
 
@@ -1731,7 +1770,10 @@ async def main(event_loop, args, app_close_event):
     nysor_version = get_nysor_version()
     logger.info("Starting Nysor {}", nysor_version)
 
-    requested_paths, nvim_exec_path = process_args(args)
+    try:
+        requested_paths, nvim_exec_path = process_args(args)
+    except NeovimExecutableNotFound as exc:
+        _show_nvim_not_found_dialog(exc)  # exits the process
 
     if requested_paths != SPECIAL_STDIN_PATH and requested_paths:
         # ask the swarm about each path (concurrently) and

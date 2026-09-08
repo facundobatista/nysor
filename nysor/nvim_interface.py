@@ -68,8 +68,9 @@ class NvimInterface:
 
         _sock_path = self._get_unique_sock_path()
         logger.info("Starting Neovim process, communicating through {!r}", _sock_path)
-        if nvim_exec_path is None:
-            nvim_exec_path = "nvim"
+        # the caller (see main.py) always resolves this to a concrete path -- kept here (rather
+        # than resolved again) so we always know, and can later report, the actual binary in use
+        self.nvim_exec_path = nvim_exec_path
         try:
             self._proc = subprocess.Popen([nvim_exec_path, "--headless", "--listen", _sock_path])
         except FileNotFoundError as exc:

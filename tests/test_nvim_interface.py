@@ -203,21 +203,10 @@ class TestNvimInterfaceInit:
         mocker.patch.object(NvimInterface, "_get_unique_sock_path", return_value=mock.sock_path)
         popen_mock = mocker.patch("nysor.nvim_interface.subprocess.Popen", return_value=mock.proc)
         loop = asyncio.get_event_loop()
-        NvimInterface("nvim", loop, MagicMock(), MagicMock())
+        iface = NvimInterface("nvim", loop, MagicMock(), MagicMock())
         await mock.accept()
         popen_mock.assert_called_once_with(["nvim", "--headless", "--listen", mock.sock_path])
-        mock.close()
-
-    async def test_default_exec_path(self, mocker, sock_path):
-        """None as exec path defaults to 'nvim'."""
-        mock = NeovimMock(sock_path)
-        mocker.patch.object(NvimInterface, "_get_api_info")
-        mocker.patch.object(NvimInterface, "_get_unique_sock_path", return_value=mock.sock_path)
-        popen_mock = mocker.patch("nysor.nvim_interface.subprocess.Popen", return_value=mock.proc)
-        loop = asyncio.get_event_loop()
-        NvimInterface(None, loop, MagicMock(), MagicMock())
-        await mock.accept()
-        assert popen_mock.call_args[0][0][0] == "nvim"
+        assert iface.nvim_exec_path == "nvim"
         mock.close()
 
     def test_executable_not_found(self, mocker, sock_path):
