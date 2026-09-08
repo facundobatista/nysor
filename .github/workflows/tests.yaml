@@ -78,7 +78,7 @@ jobs:
           pytest
 
   tests-required:
-    needs: test
+    needs: run-tests
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
