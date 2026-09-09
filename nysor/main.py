@@ -1406,6 +1406,44 @@ class MainApp(QMainWindow):
         display._last_grid_size = (cols, rows)
         self.nvi.future_request("nvim_ui_try_resize_grid", entry.grid_id, cols, rows)
 
+    async def check_for_split(self, entry):
+        """Detect whether a just-built tab is actually a Neovim *split* of an existing one.
+
+        A split (':split'/':vsplit', ':help', etc.) creates a new WINDOW in the SAME tabpage as
+        an existing one -- unlike a real new tabpage, nothing gets hidden, so our "any new grid is
+        a new tab" model builds a second, redundant tab showing the very same buffer (editing
+        either one edits both, since they really are two views of the one buffer). We cannot tell
+        them apart synchronously (win_pos does not carry the tabpage), so this runs once the
+        window's tabpage is known: if it matches an already-tracked entry's tabpage, this is that
+        entry's split sibling -- detach it into its own window (exactly the UX a split is going
+        for: seeing two things at once) instead of leaving a confusing duplicate tab, and let the
+        sibling regain its full size now that it is not sharing the tabpage with anything else in
+        the main window.
+        """
+        if entry.tabpage is not None:
+            return  # already resolved for this grid
+        tabpage_handle = await self.nvi.call("nvim_win_get_tabpage", entry.win_id)
+        tabpage_id = tabpage_handle[1]  # decoded as ['Tabpage', id], see nvim_interface.ext_hook
+        registry.set_tabpage(entry.grid_id, tabpage_id)
+
+        sibling = next(
+            (e for e in registry.get_all_entries()
+             if e.grid_id != entry.grid_id and e.tabpage == tabpage_id),
+            None)
+        if sibling is None:
+            return  # a genuinely new tabpage, not a split
+
+        self.detach_tab(entry)
+
+        # the sibling lost width/height to make room for the split; it is not the globally
+        # "active" grid (this new one is), so resize_editor_grid's guard would skip it -- but it
+        # IS on the current tabpage (the same one as this split, by definition), so it is safe
+        display = sibling.pane.text_display
+        if display.font_size is not None:
+            cols = max(MIN_COLS_ROWS, int(display.width() / display.font_size.width))
+            rows = max(MIN_COLS_ROWS, int(display.height() / display.font_size.height))
+            self.nvi.future_request("nvim_ui_try_resize_grid", sibling.grid_id, cols, rows)
+
     def _path_discover_cb(self, path):
         """Swarm callback: if we have the `path`, reveal its tab/window.
 

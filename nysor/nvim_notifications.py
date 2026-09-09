@@ -67,6 +67,10 @@ class GridEntry:
     win_id: int | None = None
     bufnr: int | None = None
     filepath: str | None = None
+    # the Neovim tabpage this window belongs to; None until queried (see _n_redraw__win_pos).
+    # Two entries sharing the same tabpage are a Neovim *split*, not separate tabpages -- see
+    # MainApp.handle_split_grid
+    tabpage: int | None = None
 
 
 class GridRegistry:
@@ -123,6 +127,13 @@ class GridRegistry:
             self._by_win.pop(entry.win_id, None)
         entry.win_id = win_id
         self._by_win[win_id] = entry
+
+    def set_tabpage(self, grid_id: int, tabpage: int) -> None:
+        """Set (or update) the Neovim tabpage a window grid belongs to."""
+        entry = self._by_grid.get(grid_id)
+        if entry is None:
+            return
+        entry.tabpage = tabpage
 
     def set_buffer(self, grid_id: int, bufnr: int, filepath: str) -> None:
         """Set (or update) the buffer and filepath a window grid shows."""
@@ -441,6 +452,9 @@ class NvimNotifications:
             self._ensure_editor(grid_id)
             registry.set_win(grid_id, win_id)
             self.main_window.set_active_editor(grid_id)
+            # win_pos never tells us the tabpage, so a split (new window, same tabpage as an
+            # existing tab) looks identical to a real new tabpage until this resolves
+            call_async(self.main_window.check_for_split, registry.get_required(grid_id=grid_id))
 
             # if buffer info arrived before this window was known, apply it now
             if win_id in self._pending_buffers:
