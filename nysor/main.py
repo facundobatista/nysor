@@ -720,6 +720,9 @@ class MainApp(QMainWindow):
         # from win_pos, updated BEFORE building its tab so a relayout mid-build cannot resize the
         # previously-active (now hidden) window
         self._active_grid = None
+        # last (cols, rows) sent for the shared global grid, to skip redundant resizes; kept here
+        # (not on a display) since the global grid is not any one display's own
+        self._last_global_grid_size = None
         self.nvim_notifs = NvimNotifications(self)
 
         # setup the Neovim interface
@@ -1368,11 +1371,11 @@ class MainApp(QMainWindow):
         strip growing/shrinking a tab never feeds back into a resize -- which used to loop, e.g.
         on a swap-file prompt).
 
-        `grid_id=None` resizes the shared GLOBAL grid (`nvim_ui_try_resize`). A real `grid_id`
-        resizes that one grid (`nvim_ui_try_resize_grid`, sticky and independent of the others),
-        skipping the call when `display.last_grid_size` already matches -- callers whose cached
-        value is stale for a reason OTHER than "the widget did not resize" (see check_for_split)
-        must clear `display.last_grid_size` themselves before calling this.
+        Either way the call is skipped when nothing changed at grid granularity since the last
+        one we sent -- `grid_id=None` compares against `self._last_global_grid_size` (the global
+        grid is not any one display's own); a real `grid_id` compares against the display's own
+        `last_grid_size`. Callers whose cached value is stale for a reason OTHER than "the widget
+        did not resize" (see check_for_split) must clear it themselves before calling this.
         """
         font_size = display.font_size
         if font_size is None:
@@ -1382,6 +1385,9 @@ class MainApp(QMainWindow):
         rows = max(MIN_COLS_ROWS, int(height_widget.height() / font_size.height))
 
         if grid_id is None:
+            if (cols, rows) == self._last_global_grid_size:
+                return  # nothing changed at grid granularity; skip the redundant resize
+            self._last_global_grid_size = (cols, rows)
             self.nvi.future_request("nvim_ui_try_resize", cols, rows)
             return
         if (cols, rows) == display.last_grid_size:
