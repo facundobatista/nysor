@@ -308,7 +308,7 @@ class TextDisplay(BaseDisplay):
         self.pane = pane
         self.initial_resizing_done = False
         # last (cols, rows) we told Neovim this window's grid should be, to skip redundant resizes
-        self._last_grid_size = None
+        self.last_grid_size = None
 
         # some defaults
         self.font_size = None

@@ -332,8 +332,14 @@ class NvimNotifications:
         """Handle the notification when a window's buffer starts/stops having changes."""
         entry = registry.get(win_id=win_id)
         # entry may legitimately be None when the change arrives for a window we don't know yet
-        if entry is not None:
-            self.main_window.set_tab_modified(entry, is_modified)
+        if entry is None or entry.bufnr is None:
+            return
+        # 'modified' is a property of the BUFFER, not of any one window -- Neovim only reports it
+        # for the window that was current when it changed, but a split's sibling window (or any
+        # other tab showing the same buffer) is just as modified and must reflect it too
+        for sibling in registry.get_all_entries():
+            if sibling.bufnr == entry.bufnr:
+                self.main_window.set_tab_modified(sibling, is_modified)
 
     def _h__window_buffer(self, win_id: int, bufnr: int, filepath: str):
         """Handle the notification about which buffer a window shows.

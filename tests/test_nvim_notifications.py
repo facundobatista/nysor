@@ -89,6 +89,7 @@ class TestNvimNotificationsHandler:
     def test_known_method_is_dispatched(self, notif):
         """handler() calls the matching _h__* method with the notification params."""
         nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        nvim_notifications.registry.set_buffer(2, 7, "/some/path")
         notif.handler("modified_changed", [5, True])
         notif.main_window.set_tab_modified.assert_called_once_with(notif._entry, True)
 
@@ -128,8 +129,30 @@ class TestNvimNotificationsHandlers:
     def test_modified_changed(self, notif):
         """A modified change for a known window marks that window's tab."""
         nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        nvim_notifications.registry.set_buffer(2, 7, "/some/path")
         notif._h__modified_changed(5, True)
         notif.main_window.set_tab_modified.assert_called_once_with(notif._entry, True)
+
+    def test_modified_changed_ignored_without_a_known_buffer(self, notif):
+        """No buffer known yet for the window -> nothing to mark modified."""
+        nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        notif._h__modified_changed(5, True)
+        notif.main_window.set_tab_modified.assert_not_called()
+
+    def test_modified_changed_propagates_to_every_window_of_the_buffer(self, notif):
+        """A split's sibling window (same buffer, different grid) is marked modified too."""
+        nvim_notifications.registry.set_win(2, 5)  # grid 2 (window id 5) already has notif._pane
+        nvim_notifications.registry.set_buffer(2, 7, "/some/path")
+        sibling_pane = object()
+        sibling_entry = nvim_notifications.registry.add_grid(4, sibling_pane)
+        nvim_notifications.registry.set_win(4, 6)
+        nvim_notifications.registry.set_buffer(4, 7, "/some/path")  # same bufnr as grid 2
+
+        notif._h__modified_changed(5, True)  # reported for grid 2's window
+
+        assert notif.main_window.set_tab_modified.call_count == 2
+        notif.main_window.set_tab_modified.assert_any_call(notif._entry, True)
+        notif.main_window.set_tab_modified.assert_any_call(sibling_entry, True)
 
     def test_window_buffer_known_window(self, notif):
         """Buffer info for a known window records the buffer and refreshes the tab."""
