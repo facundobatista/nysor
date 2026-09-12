@@ -682,9 +682,16 @@ class DetachedWindow(QMainWindow):
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
 
     def changeEvent(self, event):
-        """When this window gains focus, make its pane the active editor."""
+        """When this window gains focus, make its pane the active editor.
+
+        deleteLater() (see destroy_editor_tab) defers the actual Qt teardown, so this window can
+        still receive an activation change -- e.g. from focus shuffling as a sibling window closes
+        -- after its pane is already gone from the registry; skip it rather than crash.
+        """
         super().changeEvent(event)
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            if self._pane.closed:
+                return
             self._app.activate_pane(self._pane)
 
     def closeEvent(self, event):
