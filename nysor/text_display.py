@@ -312,17 +312,19 @@ class TextDisplay(BaseDisplay):
 
         # some defaults
         self.font_size = None
-        self.display_size = (80, 20)
+        if interactive:
+            self.display_size = (80, 20)
+        else:
+            self.display_size = (80, 1)
         self.lines = LogicalLines.empty()
-        # the (size, view_origin_row) self.lines was last actually built for by clear(); None
-        # means never (still the placeholder from LogicalLines.empty() above) -- must be set
-        # before set_font, since it triggers the first resize_view() call
-        self._lines_built_for = None
 
         # first grid row to paint at the top of the widget; non-zero lets a strip render a
         # sub-range of a larger grid (e.g. the statusline strip shows only grid 1's status row);
         # must be set before set_font too, since _build_empty_logical_lines() reads it
         self.view_origin_row = 0
+        # the (size, view_origin_row) self.lines was last actually built for by clear()
+        self._lines_built_for = (self.display_size, self.view_origin_row)
+
         self.set_font("Courier", 12)
 
         self.cursor_pos = (0, 0)
@@ -730,13 +732,8 @@ class TextDisplay(BaseDisplay):
         if fmt is not None:
             return fmt
 
-        # the base is always the default color; not known yet the very first time a display is
-        # cleared (during its own construction, before any redraw has ever arrived) -- a plain
-        # placeholder is fine there: it is not cached below, so this recomputes correctly once
-        # Neovim's real colors arrive
-        default_colors = self.main_window.nvim_notifs.structs.get("default_colors")
-        if default_colors is None:
-            return CharFormat(background=QColor(255, 255, 255), foreground=QColor(0, 0, 0))
+        # the base is always the default color
+        default_colors = self.main_window.nvim_notifs.structs["default_colors"]
 
         fmt = CharFormat(
             background=QColor(default_colors["background"]),
