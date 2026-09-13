@@ -81,6 +81,85 @@ class TestBasic:
         ]
 
 
+class TestStartRow:
+
+    def test_default_starts_at_zero(self):
+        """Without start_row, rows are built as 0..q_rows-1, as before."""
+        ll = LogicalLines(2, 3, "fmt_default")
+        assert ll.get(0) == [LogicalChar(" ", "fmt_default")] * 3
+        assert ll.get(1) == [LogicalChar(" ", "fmt_default")] * 3
+        assert ll.get(2) is None
+
+    def test_explicit_start_row(self):
+        """With start_row, rows are built starting there, not at 0."""
+        ll = LogicalLines(2, 3, "fmt_default", start_row=10)
+        assert ll.get(0) is None
+        assert ll.get(9) is None
+        assert ll.get(10) == [LogicalChar(" ", "fmt_default")] * 3
+        assert ll.get(11) == [LogicalChar(" ", "fmt_default")] * 3
+        assert ll.get(12) is None
+
+    def test_add_at_start_row(self):
+        """Content can be added at the rows the grid was actually built for."""
+        ll = LogicalLines(1, 5, "fmt_default", start_row=10)
+        ll.add(10, 0, [("foo", "fmt1")])
+
+        line = ll.get(10)
+        assert [lc.char for lc in line] == ["f", "o", "o", " ", " "]
+
+
+class TestEnsureSize:
+
+    def test_grows_new_rows_from_empty(self):
+        """Rows that did not exist yet are created blank, at the requested width."""
+        ll = LogicalLines.empty()
+        ll.ensure_size(0, 2, 3, "fmt_default")
+
+        assert ll.get(0) == [LogicalChar(" ", "fmt_default")] * 3
+        assert ll.get(1) == [LogicalChar(" ", "fmt_default")] * 3
+        assert ll.get(2) is None
+
+    def test_grows_new_rows_at_a_start_row(self):
+        """New rows are created at the given row_start, not always from 0."""
+        ll = LogicalLines.empty()
+        ll.ensure_size(10, 2, 3, "fmt_default")
+
+        assert ll.get(0) is None
+        assert ll.get(10) == [LogicalChar(" ", "fmt_default")] * 3
+        assert ll.get(11) == [LogicalChar(" ", "fmt_default")] * 3
+
+    def test_pads_an_existing_narrower_row(self):
+        """A row that already exists, but is narrower than requested, gets padded, keeping it."""
+        ll = LogicalLines(1, 2, "fmt_default")
+        ll.add(0, 0, [("XY", "fmt1")])
+
+        ll.ensure_size(0, 1, 5, "fmt_default")
+
+        line = ll.get(0)
+        assert [lc.char for lc in line] == ["X", "Y", " ", " ", " "]
+        assert [lc.format for lc in line] == ["fmt1"] * 2 + ["fmt_default"] * 3
+
+    def test_leaves_an_existing_wide_enough_row_untouched(self):
+        """A row already at least as wide as requested is left exactly as it was."""
+        ll = LogicalLines(1, 5, "fmt_default")
+        ll.add(0, 0, [("XYZWQ", "fmt1")])
+
+        ll.ensure_size(0, 1, 3, "fmt_default")
+
+        line = ll.get(0)
+        assert [lc.char for lc in line] == ["X", "Y", "Z", "W", "Q"]
+
+    def test_shrinking_the_row_range_keeps_rows_outside_it(self):
+        """Asking for fewer rows does not drop the rows that are no longer requested."""
+        ll = LogicalLines(3, 2, "fmt_default")
+        ll.add(2, 0, [("XY", "fmt1")])
+
+        ll.ensure_size(0, 1, 2, "fmt_default")
+
+        line = ll.get(2)
+        assert [lc.char for lc in line] == ["X", "Y"]
+
+
 class TestAddingRows:
 
     def test_offlimit_empty(self):

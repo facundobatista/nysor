@@ -734,7 +734,6 @@ class TextDisplay(BaseDisplay):
 
         # the base is always the default color
         default_colors = self.main_window.nvim_notifs.structs["default_colors"]
-
         fmt = CharFormat(
             background=QColor(default_colors["background"]),
             foreground=QColor(default_colors["foreground"]),

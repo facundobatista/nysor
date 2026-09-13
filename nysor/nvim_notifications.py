@@ -62,14 +62,42 @@ class GridEntry:
     association among them. The Qt pane is held as an opaque reference (the registry never touches
     Qt).
     """
+    # Neovim's own id for this *grid* (an ext_multigrid concept): the compositing surface nvim
+    # draws one window's content onto. Stable for the grid's whole lifetime -- assigned once, in
+    # add_grid(), and never reassigned; the entry disappears (forget_grid) when the grid does
+    # (grid_destroy).
     grid_id: int
+
+    # the Qt widget (an EditorPane) that renders this grid on screen -- one pane per grid, whether
+    # it lives in the tab strip or has been pulled into its own DetachedWindow. Set once, at
+    # add_grid() time, and never changes for this entry's lifetime.
     pane: QWidget
+
+    # Neovim's own id for the *window* showing this grid: a window is the actual split/pane
+    # inside Neovim (nvim_win_*, ':close' etc. all take this). Distinct from grid_id because they
+    # answer different questions (grid_id is "which surface", win_id is "which window"), though
+    # nysor keeps them in lockstep (one grid per window). None until the first win_pos for this
+    # grid arrives (see set_win()); can be reassigned later (e.g. nvim reusing a window id).
     win_id: int | None = None
+
+    # Neovim's own id for the *buffer* (the actual text/file content) shown in this window right
+    # now. Several windows/grids can share the same bufnr (e.g. the same file open in two splits).
+    # None until the window's buffer becomes known (either the 'window_buffer' autocmd notifies
+    # us, or check_for_split() queries it directly for a window that never fired that autocmd).
     bufnr: int | None = None
+
+    # the on-disk path of the buffer above (empty string for an unnamed buffer), used for the tab
+    # label/title and for detecting "this file is already open" elsewhere. Kept alongside bufnr
+    # (not looked up separately) because it is set at the exact same time, by the exact same two
+    # sources -- see bufnr's comment. None until then.
     filepath: str | None = None
-    # the Neovim tabpage this window belongs to; None until queried (see _n_redraw__win_pos).
-    # Two entries sharing the same tabpage are a Neovim *split*, not separate tabpages -- see
-    # MainApp.handle_split_grid
+
+    # the Neovim *tabpage* this window belongs to -- the thing Qt tabs actually mirror one-to-one.
+    # None until queried (see MainApp.check_for_split, the only place that ever sets it): win_pos
+    # does not carry the tabpage, and finding it out needs its own RPC round-trip, so it is
+    # resolved lazily, shortly after win_pos runs. Two entries sharing the same tabpage means their
+    # windows are a Neovim *split* of one another (':split'/':vsplit'/':help'), not two separate
+    # tabpages -- that's how check_for_split tells the two apart and auto-detaches the split.
     tabpage: int | None = None
 
 
