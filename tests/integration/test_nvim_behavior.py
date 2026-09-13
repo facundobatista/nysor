@@ -24,6 +24,34 @@ async def attach_multigrid(iface):
     await settle(iface)
 
 
+async def setup_window_buffer_autocmd(iface):
+    """Mirror MainApp.setup_nvim's 'window_buffer' autocmd (see main.py)."""
+    code = f"""
+        vim.api.nvim_create_autocmd({{'BufFilePost', 'BufReadPost', 'BufWinEnter'}}, {{
+            callback = function()
+                local win = vim.api.nvim_get_current_win()
+                local buf = vim.api.nvim_get_current_buf()
+                local name = vim.api.nvim_buf_get_name(0)
+                vim.rpcnotify({iface.channel_id}, 'window_buffer', win, buf, name)
+            end
+        }})
+    """
+    await iface.call("nvim_exec_lua", code, [])
+
+
+async def setup_modified_changed_autocmd(iface):
+    """Mirror MainApp.setup_nvim's 'modified_changed' autocmd (see main.py)."""
+    code = f"""
+        vim.api.nvim_create_autocmd({{'BufModifiedSet', 'BufWritePost'}}, {{
+            callback = function()
+                local win = vim.api.nvim_get_current_win()
+                vim.rpcnotify({iface.channel_id}, 'modified_changed', win, vim.bo.modified)
+            end
+        }})
+    """
+    await iface.call("nvim_exec_lua", code, [])
+
+
 class TestGridModel:
     """Attaching multigrid on a single fresh window produces exactly the documented 3 grids."""
 
@@ -180,3 +208,95 @@ class TestMouseGridTargeting:
         await settle(iface)
         current = handle_id(await iface.call("nvim_get_current_win"))
         assert current == right.win_id
+
+
+class TestSplitVsTabpage:
+    """Tabpage identity is what actually distinguishes a split from a real new tab.
+
+    check_for_split (main.py) tells a Neovim *split* (':split'/':vsplit'/':help' -- a new WINDOW
+    in the same tabpage) apart from a genuinely new tabpage by comparing nvim_win_get_tabpage()
+    for the two windows. This locks in that the two cases really do differ (or not) that way.
+    """
+
+    async def test_vsplit_keeps_both_windows_on_the_same_tabpage(self, nvim):
+        iface, _notifs, _main_window, _raw = nvim
+        await attach_multigrid(iface)
+        original_win = handle_id(await iface.call("nvim_get_current_win"))
+
+        await iface.call("nvim_command", "vsplit")
+        await settle(iface)
+        new_win = handle_id(await iface.call("nvim_get_current_win"))
+        assert new_win != original_win
+
+        original_tabpage = handle_id(await iface.call("nvim_win_get_tabpage", original_win))
+        new_tabpage = handle_id(await iface.call("nvim_win_get_tabpage", new_win))
+        assert original_tabpage == new_tabpage
+
+    async def test_tabedit_puts_the_new_window_on_a_different_tabpage(self, nvim, tmp_path):
+        iface, _notifs, _main_window, _raw = nvim
+        await attach_multigrid(iface)
+        original_win = handle_id(await iface.call("nvim_get_current_win"))
+
+        other_file = tmp_path / "other.txt"
+        other_file.write_text("hello\n")
+        await iface.call("nvim_command", f"tabedit {other_file}")
+        await settle(iface)
+        new_win = handle_id(await iface.call("nvim_get_current_win"))
+        assert new_win != original_win
+
+        original_tabpage = handle_id(await iface.call("nvim_win_get_tabpage", original_win))
+        new_tabpage = handle_id(await iface.call("nvim_win_get_tabpage", new_win))
+        assert original_tabpage != new_tabpage
+
+
+class TestPlainSplitBufferDiscovery:
+    """A plain ':split'/':vsplit' (no filename) fires none of our buffer-tracking autocmds.
+
+    check_for_split (main.py) falls back to querying nvim_win_get_buf/nvim_buf_get_name directly
+    for a window whose buffer is still unknown by the time win_pos resolves it, because -- locked
+    in here -- a plain split fires none of BufFilePost/BufReadPost/BufWinEnter for the new window
+    (it is showing the very same, already-loaded buffer, so none of those have a reason to fire).
+    """
+
+    async def test_plain_vsplit_does_not_notify_window_buffer(self, nvim):
+        iface, _notifs, _main_window, raw = nvim
+        await attach_multigrid(iface)
+        await setup_window_buffer_autocmd(iface)
+        raw.clear()
+
+        await iface.call("nvim_command", "vsplit")
+        await settle(iface)
+
+        window_buffer_notifications = [
+            params for method, params in raw if method == "window_buffer"]
+        assert window_buffer_notifications == []
+
+
+class TestModifiedNotificationTargetsOnlyTheCurrentWindow:
+    """Neovim reports 'modified' for the window that was current, not every window on the buffer.
+
+    NvimNotifications._h__modified_changed fans a 'modified_changed' notification out to every
+    tab sharing the buffer -- this locks in *why* that is needed: Neovim's own notification names
+    only the window that was current when the change happened, even though a split sibling shows
+    (and is just as modified in) the very same buffer.
+    """
+
+    async def test_editing_one_split_only_reports_its_own_window(self, nvim):
+        iface, _notifs, _main_window, raw = nvim
+        await attach_multigrid(iface)
+        await setup_modified_changed_autocmd(iface)
+        await iface.call("nvim_command", "vsplit")
+        await settle(iface)
+        current_win = handle_id(await iface.call("nvim_get_current_win"))
+        raw.clear()
+
+        # like TestWinExecuteAcrossWindows, use 'normal!' so the edit is synchronous with the call
+        await iface.call("nvim_command", "normal! ixxx")
+        await settle(iface)
+
+        modified_events = [params for method, params in raw if method == "modified_changed"]
+        assert len(modified_events) >= 1
+        # the win id here comes straight from Lua (vim.api.nvim_get_current_win()), already a
+        # plain int -- unlike a value returned by an RPC call, it is never ext-type wrapped
+        reported_wins = {win for win, _is_modified in modified_events}
+        assert reported_wins == {current_win}

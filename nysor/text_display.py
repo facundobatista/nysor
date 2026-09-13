@@ -308,21 +308,28 @@ class TextDisplay(BaseDisplay):
         self.pane = pane
         self.initial_resizing_done = False
         # last (cols, rows) we told Neovim this window's grid should be, to skip redundant resizes
-        self._last_grid_size = None
+        self.last_grid_size = None
 
         # some defaults
         self.font_size = None
-        self.display_size = (80, 20)
+        if interactive:
+            self.display_size = (80, 20)
+        else:
+            self.display_size = (80, 1)
+        self.lines = LogicalLines.empty()
+
+        # first grid row to paint at the top of the widget; non-zero lets a strip render a
+        # sub-range of a larger grid (e.g. the statusline strip shows only grid 1's status row);
+        # must be set before set_font too, since _build_empty_logical_lines() reads it
+        self.view_origin_row = 0
+        # the (size, view_origin_row) self.lines was last actually built for by clear()
+        self._lines_built_for = (self.display_size, self.view_origin_row)
+
         self.set_font("Courier", 12)
 
-        self.lines = LogicalLines.empty()
         self.cursor_pos = (0, 0)
         self.cursor_painter = lambda *a: None
         self.need_grid_clearing = True
-
-        # first grid row to paint at the top of the widget; non-zero lets a strip render a
-        # sub-range of a larger grid (e.g. the statusline strip shows only grid 1's status row)
-        self.view_origin_row = 0
 
         # cache to hold conversions between Neovim's highlight info and Qt formats
         self.nvimhl_to_qtfmt = {}
@@ -369,15 +376,21 @@ class TextDisplay(BaseDisplay):
         self.main_window.nvi.future_request("nvim_input", composed)
 
     def _build_empty_logical_lines(self):
-        """Build an empty logical lines."""
+        """Build an empty logical lines, keyed starting at the current view origin row.
+
+        Rows are stored under Neovim's own (absolute) row numbers for this grid -- 'paint' looks
+        them up as 'view_origin_row + row' -- so a strip whose origin is not 0 (e.g. the
+        statusline strip) must pre-build its rows starting there too, not at 0.
+        """
         default_fmt = self._build_text_format(None)
         cols, rows = self.display_size
-        return LogicalLines(rows, cols, default_fmt)
+        return LogicalLines(rows, cols, default_fmt, start_row=self.view_origin_row)
 
     def clear(self):
-        """Clear the display."""
+        """Clear the display, rebuilding the logical grid at its current display_size."""
         self.need_grid_clearing = True
         self.lines = self._build_empty_logical_lines()
+        self._lines_built_for = (self.display_size, self.view_origin_row)
 
     def set_font(self, name, size):
         """Set the font."""
@@ -403,6 +416,8 @@ class TextDisplay(BaseDisplay):
         """Resize the display.
 
         If size is given (W x H) it is used; else use current size (if not set, default to 80x20.
+
+        A real size (or view origin) change also grows the logical grid to match it.
         """
         if size is None:
             size = self.display_size
@@ -418,6 +433,9 @@ class TextDisplay(BaseDisplay):
         view_width = math.ceil(self.font_size.width * cols)
         view_height = math.ceil(self.font_size.height * rows)
         self.widget_size = QSize(view_width, view_height)
+        if (size, self.view_origin_row) != self._lines_built_for:
+            self.lines.ensure_size(self.view_origin_row, rows, cols, self._build_text_format(None))
+            self._lines_built_for = (size, self.view_origin_row)
         if force:
             self.updateGeometry()
             self.main_window.adjustSize()
@@ -767,8 +785,15 @@ class TextDisplay(BaseDisplay):
         """Write a sequence starting in the given row/column.
 
         The sequence is a list of text, or text and highlight id, or text, highlight id and
-        repetitions.
+        repetitions. Rows outside what this display actually shows are ignored: the global grid
+        carries more than the single status row the statusline strip renders (e.g. the vertical
+        separator between two split windows, drawn on rows spanning the whole screen height), and
+        this display never built logical lines for those rows in the first place.
         """
+        _, display_rows = self.display_size
+        if not (self.view_origin_row <= row < self.view_origin_row + display_rows):
+            return
+
         textinfo = []
 
         fmt = self._build_text_format(None)

@@ -682,9 +682,16 @@ class DetachedWindow(QMainWindow):
         pane.show()  # removeTab hid the pane; setCentralWidget does not re-show it on its own
 
     def changeEvent(self, event):
-        """When this window gains focus, make its pane the active editor."""
+        """When this window gains focus, make its pane the active editor.
+
+        deleteLater() (see destroy_editor_tab) defers the actual Qt teardown, so this window can
+        still receive an activation change -- e.g. from focus shuffling as a sibling window closes
+        -- after its pane is already gone from the registry; skip it rather than crash.
+        """
         super().changeEvent(event)
         if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            if self._pane.closed:
+                return
             self._app.activate_pane(self._pane)
 
     def closeEvent(self, event):
@@ -720,6 +727,9 @@ class MainApp(QMainWindow):
         # from win_pos, updated BEFORE building its tab so a relayout mid-build cannot resize the
         # previously-active (now hidden) window
         self._active_grid = None
+        # last (cols, rows) sent for the shared global grid, to skip redundant resizes; kept here
+        # (not on a display) since the global grid is not any one display's own
+        self._last_global_grid_size = None
         self.nvim_notifs = NvimNotifications(self)
 
         # setup the Neovim interface
@@ -923,16 +933,25 @@ class MainApp(QMainWindow):
         self.message_display.set_font(name, size)
         self.statusline_display.set_font(name, size)
 
-    def set_editor_mode(self, mode_info):
+    def set_editor_mode(self, mode, mode_info):
         """Set the cursor mode for the ACTIVE editor, and remember it for new tabs.
 
         The mode setting (e.g. insert -> a bar cursor) belongs to Neovim's current
         window. New tabs pick up the remembered mode on build; a window picks it up
         again when it becomes active.
+
+        A 'cmdline_*' mode means the command line (rendered on the message grid, not a real
+        editor window) is the one being edited, so its own strip gets the cursor instead -- and
+        loses it again once a non-cmdline mode comes back, so a stale cmdline cursor position
+        does not linger visible after focus returns to a real editor window.
         """
         self._editor_mode = mode_info
         if self.text_display is not None:
             self.text_display.change_mode(mode_info)
+        if mode.startswith("cmdline"):
+            self.message_display.change_mode(mode_info)
+        else:
+            self.message_display.cursor_painter = lambda *a: None
 
     def build_editor_tab(self):
         """Create (or reuse) the editor pane for a new window, returning its display.
@@ -1101,13 +1120,15 @@ class MainApp(QMainWindow):
                 # request is sent before the close one)
                 self.nvi.future_request(
                     "nvim_call_function", "win_execute", [entry.win_id, "write"])
-            elif choice == "discard":
-                # run ':q!' in this window to drop the unsaved changes and close it (note
-                # nvim_win_close(force=True) would NOT discard: it just hides the buffer, still
-                # changed). The resulting grid_destroy tears the tab down.
+            else:
+                # discard: 'setlocal nomodified' is BUFFER-scoped, unlike ':q!' -- which only
+                # force-closes THIS window and, if another window still shows the same buffer
+                # (e.g. this tab's split sibling), leaves the buffer's changes completely
+                # untouched, so that sibling stays modified forever with no visible indication.
+                # Clearing the option here drops the changes regardless of how many windows show
+                # the buffer (same pattern already used in _quit).
                 self.nvi.future_request(
-                    "nvim_call_function", "win_execute", [entry.win_id, "q!"])
-                return
+                    "nvim_call_function", "win_execute", [entry.win_id, "setlocal nomodified"])
         self.nvi.future_request("nvim_win_close", entry.win_id, False)
 
     async def _ask_close_modified(self, parent, filepath):
@@ -1349,26 +1370,50 @@ class MainApp(QMainWindow):
             _code = "vim.cmd.checktime({ args = { tostring(vim.api.nvim_get_current_buf()) } })"
             self.nvi.future_request("nvim_exec_lua", _code, [])
 
+    def _send_grid_resize(self, display, *, height_widget=None, grid_id=None):
+        """Compute cols/rows for a display's on-screen pixel size and tell Neovim to resize.
+
+        Width always comes from `display` itself; height comes from `height_widget` if given,
+        else `display` too (`_resize_global_grid` passes the whole central widget instead, so a
+        strip growing/shrinking a tab never feeds back into a resize -- which used to loop, e.g.
+        on a swap-file prompt).
+
+        Either way the call is skipped when nothing changed at grid granularity since the last
+        one we sent -- `grid_id=None` compares against `self._last_global_grid_size` (the global
+        grid is not any one display's own); a real `grid_id` compares against the display's own
+        `last_grid_size`. Callers whose cached value is stale for a reason OTHER than "the widget
+        did not resize" (see check_for_split) must clear it themselves before calling this.
+        """
+        font_size = display.font_size
+        if font_size is None:
+            return
+        height_widget = display if height_widget is None else height_widget
+        cols = max(MIN_COLS_ROWS, int(display.width() / font_size.width))
+        rows = max(MIN_COLS_ROWS, int(height_widget.height() / font_size.height))
+
+        if grid_id is None:
+            if (cols, rows) == self._last_global_grid_size:
+                return  # nothing changed at grid granularity; skip the redundant resize
+            self._last_global_grid_size = (cols, rows)
+            self.nvi.future_request("nvim_ui_try_resize", cols, rows)
+            return
+        if (cols, rows) == display.last_grid_size:
+            return  # nothing changed at grid granularity; skip the redundant resize
+        display.last_grid_size = (cols, rows)
+        self.nvi.future_request("nvim_ui_try_resize_grid", grid_id, cols, rows)
+
     def _resize_global_grid(self):
         """Tell Neovim the global grid size, computed from the full editing area.
 
-        This is driven by the window size (not the editor tab's size), so a strip growing or
-        shrinking a tab never feeds back into a resize (which used to loop, e.g. on a swap-file
-        prompt). Neovim carves the statusline/message rows out of this global size itself.
-
-        It uses the main window's tab area (not the active display, which may be a detached window)
-        so detaching/activating a floating window never changes the global grid size.
+        It uses the main window's tab area (not the active display, which may be a detached
+        window) so detaching/activating a floating window never changes the global grid size.
+        Neovim carves the statusline/message rows out of this global size itself.
         """
         display = self.tabs.currentWidget()
         display = display.text_display if display is not None else None
-        if display is None or display.font_size is None:
+        if display is None:
             return
-        font_size = display.font_size
-        # width from the editor's text area (excludes the scroll bar); height from the whole
-        # area (so a strip growing/shrinking never changes the size we send -> no resize loop)
-        cols = max(MIN_COLS_ROWS, int(display.width() / font_size.width))
-        rows = max(MIN_COLS_ROWS, int(self.central_widget.height() / font_size.height))
-        self.nvi.future_request("nvim_ui_try_resize", cols, rows)
+        self._send_grid_resize(display, height_widget=self.central_widget)
 
     def resize_editor_grid(self, display):
         """Resize the active editor's Neovim window grid to match its display's on-screen size.
@@ -1389,13 +1434,57 @@ class MainApp(QMainWindow):
         entry = registry.get(pane=display.pane)
         if entry is None or entry.grid_id != self._active_grid:
             return  # not the current tabpage's window -> would be rejected; re-pins on activation
-        font_size = display.font_size
-        cols = max(MIN_COLS_ROWS, int(display.width() / font_size.width))
-        rows = max(MIN_COLS_ROWS, int(display.height() / font_size.height))
-        if (cols, rows) == display._last_grid_size:
-            return  # nothing changed at grid granularity; skip the redundant resize
-        display._last_grid_size = (cols, rows)
-        self.nvi.future_request("nvim_ui_try_resize_grid", entry.grid_id, cols, rows)
+        self._send_grid_resize(display, grid_id=entry.grid_id)
+
+    async def check_for_split(self, entry):
+        """Detect whether a just-built tab is actually a Neovim *split* of an existing one.
+
+        A split (':split'/':vsplit', ':help', etc.) creates a new WINDOW in the SAME tabpage as
+        an existing one -- unlike a real new tabpage, nothing gets hidden, so our "any new grid is
+        a new tab" model builds a second, redundant tab showing the very same buffer (editing
+        either one edits both, since they really are two views of the one buffer). We cannot tell
+        them apart synchronously: win_pos does not carry the tabpage, and finding it out is an
+        RPC round-trip, which win_pos's handler (a plain sync method) cannot await -- so
+        `entry.tabpage` legitimately starts as None (not yet known) and gets resolved here, the
+        first and only place that ever sets it, shortly after win_pos runs.
+
+        If the resolved tabpage matches an already-tracked entry's, this is that entry's split
+        sibling -- detach it into its own window (exactly the UX a split is going for: seeing two
+        things at once) instead of leaving a confusing duplicate tab, and let the sibling regain
+        its full size now that it is not sharing the tabpage with anything else in the main window.
+
+        A plain ':split'/':vsplit' (no filename) does not fire the window_buffer autocmd for the
+        new window either (verified empirically: only win_pos arrives, confirmed against nvim
+        0.12.2) -- so its buffer/filepath is fetched directly here too, whether or not it turns
+        out to be a split, whenever it is still unknown by the time we get here.
+        """
+        if entry.tabpage is not None:
+            return  # already resolved for this grid
+        tabpage_handle = await self.nvi.call("nvim_win_get_tabpage", entry.win_id)
+        tabpage_id = tabpage_handle[1]  # decoded as ['Tabpage', id], see nvim_interface.ext_hook
+        registry.set_tabpage(entry.grid_id, tabpage_id)
+
+        if entry.filepath is None:
+            bufnr_handle = await self.nvi.call("nvim_win_get_buf", entry.win_id)
+            bufnr = bufnr_handle[1]  # decoded as ['Buffer', id], see nvim_interface.ext_hook
+            filepath = await self.nvi.call("nvim_buf_get_name", bufnr)
+            registry.set_buffer(entry.grid_id, bufnr, filepath)
+
+        sibling = next(
+            (e for e in registry.get_all_entries()
+             if e.grid_id != entry.grid_id and e.tabpage == tabpage_id),
+            None)
+        if sibling is None:
+            return  # a genuinely new tabpage, not a split
+
+        self.detach_tab(entry)
+
+        # the cached last_grid_size is now meaningless: the sibling's WIDGET never resized, only
+        # Neovim's own idea of its grid size did (the split itself); clear it so the resize below
+        # is not skipped as a false "nothing changed"
+        display = sibling.pane.text_display
+        display.last_grid_size = None
+        self._send_grid_resize(display, grid_id=sibling.grid_id)
 
     def _path_discover_cb(self, path):
         """Swarm callback: if we have the `path`, reveal its tab/window.

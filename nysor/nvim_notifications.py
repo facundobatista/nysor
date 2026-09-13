@@ -62,11 +62,44 @@ class GridEntry:
     association among them. The Qt pane is held as an opaque reference (the registry never touches
     Qt).
     """
+    # Neovim's own id for this *grid* (an ext_multigrid concept): the compositing surface nvim
+    # draws one window's content onto. Stable for the grid's whole lifetime -- assigned once, in
+    # add_grid(), and never reassigned; the entry disappears (forget_grid) when the grid does
+    # (grid_destroy).
     grid_id: int
+
+    # the Qt widget (an EditorPane) that renders this grid on screen -- one pane per grid, whether
+    # it lives in the tab strip or has been pulled into its own DetachedWindow. Set once, at
+    # add_grid() time, and never changes for this entry's lifetime.
     pane: QWidget
+
+    # Neovim's own id for the *window* showing this grid: a window is the actual split/pane
+    # inside Neovim (nvim_win_*, ':close' etc. all take this). Distinct from grid_id because they
+    # answer different questions (grid_id is "which surface", win_id is "which window"), though
+    # nysor keeps them in lockstep (one grid per window). None until the first win_pos for this
+    # grid arrives (see set_win()); can be reassigned later (e.g. nvim reusing a window id).
     win_id: int | None = None
+
+    # Neovim's own id for the *buffer* (the actual text/file content) shown in this window right
+    # now. Several windows/grids can share the same bufnr (e.g. the same file open in two splits).
+    # None until the window's buffer becomes known (either the 'window_buffer' autocmd notifies
+    # us, or check_for_split() queries it directly for a window that never fired that autocmd).
     bufnr: int | None = None
+
+    # the on-disk path of the buffer above, used for the tab label/title and for detecting "this
+    # file is already open" elsewhere. Two distinct "unknown"/"empty" states: None means it has
+    # not been resolved yet (same as bufnr being None -- set_buffer() always sets both together);
+    # "" means it WAS resolved and the buffer genuinely has no file name (nvim_buf_get_name
+    # returns "" for an unnamed buffer, not nil), e.g. a plain ':split'/':vsplit' with no argument.
     filepath: str | None = None
+
+    # the Neovim *tabpage* this window belongs to -- the thing Qt tabs actually mirror one-to-one.
+    # None until queried (see MainApp.check_for_split, the only place that ever sets it): win_pos
+    # does not carry the tabpage, and finding it out needs its own RPC round-trip, so it is
+    # resolved lazily, shortly after win_pos runs. Two entries sharing the same tabpage means their
+    # windows are a Neovim *split* of one another (':split'/':vsplit'/':help'), not two separate
+    # tabpages -- that's how check_for_split tells the two apart and auto-detaches the split.
+    tabpage: int | None = None
 
 
 class GridRegistry:
@@ -123,6 +156,13 @@ class GridRegistry:
             self._by_win.pop(entry.win_id, None)
         entry.win_id = win_id
         self._by_win[win_id] = entry
+
+    def set_tabpage(self, grid_id: int, tabpage: int) -> None:
+        """Set (or update) the Neovim tabpage a window grid belongs to."""
+        entry = self._by_grid.get(grid_id)
+        if entry is None:
+            return
+        entry.tabpage = tabpage
 
     def set_buffer(self, grid_id: int, bufnr: int, filepath: str) -> None:
         """Set (or update) the buffer and filepath a window grid shows."""
@@ -321,8 +361,14 @@ class NvimNotifications:
         """Handle the notification when a window's buffer starts/stops having changes."""
         entry = registry.get(win_id=win_id)
         # entry may legitimately be None when the change arrives for a window we don't know yet
-        if entry is not None:
-            self.main_window.set_tab_modified(entry, is_modified)
+        if entry is None or entry.bufnr is None:
+            return
+        # 'modified' is a property of the BUFFER, not of any one window -- Neovim only reports it
+        # for the window that was current when it changed, but a split's sibling window (or any
+        # other tab showing the same buffer) is just as modified and must reflect it too
+        for sibling in registry.get_all_entries():
+            if sibling.bufnr == entry.bufnr:
+                self.main_window.set_tab_modified(sibling, is_modified)
 
     def _h__window_buffer(self, win_id: int, bufnr: int, filepath: str):
         """Handle the notification about which buffer a window shows.
@@ -441,6 +487,9 @@ class NvimNotifications:
             self._ensure_editor(grid_id)
             registry.set_win(grid_id, win_id)
             self.main_window.set_active_editor(grid_id)
+            # win_pos never tells us the tabpage, so a split (new window, same tabpage as an
+            # existing tab) looks identical to a real new tabpage until this resolves
+            call_async(self.main_window.check_for_split, registry.get_required(grid_id=grid_id))
 
             # if buffer info arrived before this window was known, apply it now
             if win_id in self._pending_buffers:
@@ -499,7 +548,7 @@ class NvimNotifications:
         for mode, _mode_idx in args:
             # we ignore the mode idx as we stored the modes in a dict using the name
             mode_info = self.structs["mode-info"][mode]
-            self.main_window.set_editor_mode(mode_info)
+            self.main_window.set_editor_mode(mode, mode_info)
 
     def _n_redraw__mode_info_set(self, *args):
         """Cursor mode definitions (may carry several)."""

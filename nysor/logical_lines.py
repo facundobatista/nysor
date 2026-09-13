@@ -48,9 +48,10 @@ class LogicalChar:
 class LogicalLines:
     """Hold the lines to show in the grid."""
 
-    def __init__(self, q_rows, q_cols, fmt):
+    def __init__(self, q_rows, q_cols, fmt, start_row=0):
         self._lines = {
-            idx: [LogicalChar(" ", fmt) for _ in range(q_cols)] for idx in range(q_rows)
+            idx: [LogicalChar(" ", fmt) for _ in range(q_cols)]
+            for idx in range(start_row, start_row + q_rows)
         }
 
     @classmethod
@@ -61,6 +62,19 @@ class LogicalLines:
     def get(self, row):
         """Return the logical line for the indicated row."""
         return self._lines.get(row)
+
+    def ensure_size(self, row_start, row_count, cols, fmt):
+        """Grow the grid to cover the given row range and column width, keeping existing content.
+
+        A resize only needs the *new* area (rows/columns that did not exist before) pre-filled so
+        a later write into it does not exceed a row's length; already-lit rows that stay in view
+        must be left alone, since Neovim does not resend their content just because the client
+        asked for a different grid size.
+        """
+        for row in range(row_start, row_start + row_count):
+            line = self._lines.setdefault(row, [])
+            if len(line) < cols:
+                line.extend(LogicalChar(" ", fmt) for _ in range(cols - len(line)))
 
     def add(self, row, col, textinfo):
         """Add text info to the grid."""

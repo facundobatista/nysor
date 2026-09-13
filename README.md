@@ -118,7 +118,9 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 These are the items lousely grouped to get there:
 
 **For 0.8:**
-- fix vsplit / hsplit
+- support for this when doing "help":
+    Some text format remained unprocessed: {'url': "https://neovim.io/doc/user/helptag/?tag='nowrap'"}
+    Some text format remained unprocessed: {'nocombine': True}
 - font size with ctrl-+/-
 - Improve swarm discover latency
 

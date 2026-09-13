@@ -55,6 +55,7 @@ async def nvim(nvim_path, mocker):
     mocker.patch.object(nvim_notifications, "registry", GridRegistry())
 
     main_window = mocker.MagicMock()
+    main_window.check_for_split = mocker.AsyncMock()
 
     def _new_display(*_args, **_kwargs):
         # a fresh display (with a real, awaitable adjust_viewport) per grid built, mirroring
