@@ -86,10 +86,11 @@ class GridEntry:
     # us, or check_for_split() queries it directly for a window that never fired that autocmd).
     bufnr: int | None = None
 
-    # the on-disk path of the buffer above (empty string for an unnamed buffer), used for the tab
-    # label/title and for detecting "this file is already open" elsewhere. Kept alongside bufnr
-    # (not looked up separately) because it is set at the exact same time, by the exact same two
-    # sources -- see bufnr's comment. None until then.
+    # the on-disk path of the buffer above, used for the tab label/title and for detecting "this
+    # file is already open" elsewhere. Two distinct "unknown"/"empty" states: None means it has
+    # not been resolved yet (same as bufnr being None -- set_buffer() always sets both together);
+    # "" means it WAS resolved and the buffer genuinely has no file name (nvim_buf_get_name
+    # returns "" for an unnamed buffer, not nil), e.g. a plain ':split'/':vsplit' with no argument.
     filepath: str | None = None
 
     # the Neovim *tabpage* this window belongs to -- the thing Qt tabs actually mirror one-to-one.
