@@ -152,6 +152,7 @@ The path after that is less descriptive. The following are the big items I want 
         - have a pane specifically for "errors"? (what today is a pop-up)
     https://neovim.io/doc/user/api-ui-events/#ui-cmdline
     https://neovim.io/doc/user/api-ui-events/#ui-messages
+- FIXME.01: show URLs and offer "open link" in context menu (mouse right button)
 
 **For version 3:**
 - double clicking in the tree view should also edit the file

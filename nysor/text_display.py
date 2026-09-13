@@ -163,7 +163,7 @@ class BaseDisplay(QWidget):
         button = event.button()
 
         if button is MouseButton.RightButton:
-            # ignored
+            # FIXME.01: add "open link" to context menu if indicated
             return
 
         if button is MouseButton.MiddleButton:
@@ -746,6 +746,9 @@ class TextDisplay(BaseDisplay):
             hl_attrs = self.main_window.nvim_notifs.structs["hl-attrs"]
             hl = hl_attrs[hl_id].copy()  # copy because will consume
 
+            # ignored
+            hl.pop("nocombine", None)
+
             # basic set of attributes
             attr_names = ("foreground", "background", "strikethrough", "italic", "bold")
             for name in attr_names:
@@ -757,7 +760,9 @@ class TextDisplay(BaseDisplay):
             if reverse:
                 fmt.foreground, fmt.background = fmt.background, fmt.foreground
 
-            # XXX: we need to support 'url', but not sure the info that comes and how it spans
+            # FIXME.01: support 'url'; e.g. we're seeing the following when doing `:help`:
+            #    Some text format remained unprocessed:
+            #       {'url': "https://neovim.io/doc/user/helptag/?tag='nowrap'"}
 
             # XXX: we need to support 'blend', but still not sure how
             #   blend: blend level (0-100). Could be used by UIs to support blending floating
