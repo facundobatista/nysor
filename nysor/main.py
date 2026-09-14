@@ -926,12 +926,26 @@ class MainApp(QMainWindow):
         return tabbed + detached
 
     def set_editor_font(self, name, size):
-        """Set the font for all editor displays and the strips, and remember it for new tabs."""
+        """Set the font for all editor displays and the strips, and remember it for new tabs.
+
+        Uses set_base_font(), not set_font(), so this also resets any pane the user had zoomed
+        with Ctrl +/- back to the new editor-wide size (see TextDisplay.zoom_font).
+        """
         self._editor_font = (name, size)
         for display in self._editor_displays():
-            display.set_font(name, size)
-        self.message_display.set_font(name, size)
-        self.statusline_display.set_font(name, size)
+            display.set_base_font(name, size)
+        self.message_display.set_base_font(name, size)
+        self.statusline_display.set_base_font(name, size)
+
+    def show_font_size(self, display, size):
+        """Flash the new font size in the status bar of the window that actually hosts `display`.
+
+        A zoomed pane may live in the main window's tab strip or in its own DetachedWindow (both
+        are QMainWindow, so both have a statusBar()); show the feedback on whichever one the user
+        is actually looking at, not always the main window.
+        """
+        window = self._detached.get(display.pane, self)
+        window.statusBar().showMessage(f"Font size: {size:g}pt", 2000)
 
     def set_editor_mode(self, mode, mode_info):
         """Set the cursor mode for the ACTIVE editor, and remember it for new tabs.
@@ -973,7 +987,7 @@ class MainApp(QMainWindow):
             self.tabs.addTab(pane, UNNAMED_NAME)
         # a freshly created display starts with the current editor-wide font and cursor mode
         if self._editor_font is not None:
-            pane.text_display.set_font(*self._editor_font)
+            pane.text_display.set_base_font(*self._editor_font)
         if self._editor_mode is not None:
             pane.text_display.change_mode(self._editor_mode)
         return pane.text_display
