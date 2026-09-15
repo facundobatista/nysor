@@ -300,3 +300,34 @@ class TestModifiedNotificationTargetsOnlyTheCurrentWindow:
         # plain int -- unlike a value returned by an RPC call, it is never ext-type wrapped
         reported_wins = {win for win, _is_modified in modified_events}
         assert reported_wins == {current_win}
+
+
+class TestPerGridResizeIndependence:
+    """'nvim_ui_try_resize_grid' resizes only the targeted grid; its sibling is left alone.
+
+    This is the protocol fact TextDisplay.zoom_font (Ctrl +/-/0) and MainApp.resize_editor_grid
+    both rely on: growing/shrinking one pane's Neovim grid -- whether from a real widget resize
+    or from zooming just that pane's font, with the widget's own pixel area left untouched --
+    must never perturb another pane's grid dimensions.
+    """
+
+    async def test_resizing_one_grid_does_not_touch_its_sibling(self, nvim):
+        iface, _notifs, _main_window, raw = nvim
+        await attach_multigrid(iface)
+        await iface.call("nvim_command", "vsplit")
+        await settle(iface)
+
+        entries = nvim_notifications.registry.get_all_entries()
+        assert len(entries) == 2
+        grid_a, _grid_b = entries[0].grid_id, entries[1].grid_id
+        raw.clear()
+
+        await iface.call("nvim_ui_try_resize_grid", grid_a, 20, 10)
+        await settle(iface)
+
+        # a 'grid_resize' redraw entry is ["grid_resize", [grid, width, height], ...] -- it can
+        # carry several grids per batch, so each needs unpacking, not just the batch's own args
+        resized_grids = [
+            group[0] for name, args in redraw_events(raw) if name == "grid_resize"
+            for group in args]
+        assert resized_grids == [grid_a]

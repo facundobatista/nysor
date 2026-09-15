@@ -926,12 +926,26 @@ class MainApp(QMainWindow):
         return tabbed + detached
 
     def set_editor_font(self, name, size):
-        """Set the font for all editor displays and the strips, and remember it for new tabs."""
+        """Set the font for all editor displays and the strips, and remember it for new tabs.
+
+        Uses set_base_font(), not set_font(), so this also resets any pane the user had zoomed
+        with Ctrl +/- back to the new editor-wide size (see TextDisplay.zoom_font).
+        """
         self._editor_font = (name, size)
         for display in self._editor_displays():
-            display.set_font(name, size)
-        self.message_display.set_font(name, size)
-        self.statusline_display.set_font(name, size)
+            display.set_base_font(name, size)
+        self.message_display.set_base_font(name, size)
+        self.statusline_display.set_base_font(name, size)
+
+    def show_font_size(self, display, size):
+        """Flash the new font size in the status bar of the window that actually hosts `display`.
+
+        A zoomed pane may live in the main window's tab strip or in its own DetachedWindow (both
+        are QMainWindow, so both have a statusBar()); show the feedback on whichever one the user
+        is actually looking at, not always the main window.
+        """
+        window = self._detached.get(display.pane, self)
+        window.statusBar().showMessage(f"Font size: {size:g}pt", 2000)
 
     def set_editor_mode(self, mode, mode_info):
         """Set the cursor mode for the ACTIVE editor, and remember it for new tabs.
@@ -973,7 +987,7 @@ class MainApp(QMainWindow):
             self.tabs.addTab(pane, UNNAMED_NAME)
         # a freshly created display starts with the current editor-wide font and cursor mode
         if self._editor_font is not None:
-            pane.text_display.set_font(*self._editor_font)
+            pane.text_display.set_base_font(*self._editor_font)
         if self._editor_mode is not None:
             pane.text_display.change_mode(self._editor_mode)
         return pane.text_display
@@ -1059,7 +1073,7 @@ class MainApp(QMainWindow):
 
     def _show_unapproved_nvim_version(self, version, path):
         """Warn that the running Neovim is not in the list nysor is verified against."""
-        approved = ", ".join(nvim_versions.APPROVED)
+        approved = ", ".join(".".join(map(str, v)) for v in nvim_versions.APPROVED)
         dlg = QMessageBox(self)
         dlg.setIcon(QMessageBox.Icon.Information)
         dlg.setWindowTitle("Unverified Neovim version")
@@ -1532,10 +1546,13 @@ class MainApp(QMainWindow):
         await self.nvi.setup_completed_event.wait()
 
         if not self.nvi.validate_working_version():
+            approved = ", ".join(".".join(map(str, v)) for v in nvim_versions.APPROVED)
             logger.info(
-                "Running Neovim {} (from {!r}), not in the list of versions nysor is verified "
-                "against: {}", self.nvi.nvim_version, self.nvi.nvim_exec_path,
-                nvim_versions.APPROVED)
+                "Running Neovim {} (from {!r}), not in the list of verified versions: {}",
+                self.nvi.nvim_version,
+                self.nvi.nvim_exec_path,
+                approved,
+            )
             self._show_unapproved_nvim_version(self.nvi.nvim_version, self.nvi.nvim_exec_path)
 
         # attach the UI; multigrid gives each Neovim window (and the message area) its own

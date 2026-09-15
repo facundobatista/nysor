@@ -52,6 +52,21 @@ UNDERLINE_STYLES = [
 # never ask to Neovim a grid smaller than these
 MIN_COLS_ROWS = 5
 
+# Ctrl +/- font zoom: step in points, and the allowed size range
+FONT_ZOOM_STEP = 1.0
+FONT_SIZE_MIN = 6.0
+FONT_SIZE_MAX = 72.0
+
+# Ctrl + one of these zooms this pane's font in/out, like most editors/browsers; 0 resets it to
+# the editor-wide size instead of a step. Key_Equal is included alongside Key_Plus since '+'
+# needs Shift on many keyboard layouts, so plain Ctrl+= is the everyday-comfortable shortcut too
+FONT_ZOOM_KEYS = {
+    Qt.Key.Key_Plus: FONT_ZOOM_STEP,
+    Qt.Key.Key_Equal: FONT_ZOOM_STEP,
+    Qt.Key.Key_Minus: -FONT_ZOOM_STEP,
+    Qt.Key.Key_0: None,  # None marks the reset case, handled separately from a plain step
+}
+
 # conversion between Qt key codes and Neovim names for some special keys
 QT_NVIM_KEYS_MAP = {
     Qt.Key.Key_Left: "Left",
@@ -85,6 +100,12 @@ QT_NVIM_KEYS_MAP = {
 
 # Handier
 MouseButton = Qt.MouseButton
+
+# Quicker / simpler access to modifiers
+ControlModifier = Qt.KeyboardModifier.ControlModifier
+ShiftModifier = Qt.KeyboardModifier.ShiftModifier
+AltModifier = Qt.KeyboardModifier.AltModifier
+MetaModifier = Qt.KeyboardModifier.MetaModifier
 
 
 class BaseDisplay(QWidget):
@@ -283,11 +304,11 @@ class BaseDisplay(QWidget):
         """Return a string indicating the used modifiers, to inform Neovim."""
         indicators = []
         mods = event.modifiers()
-        if mods & Qt.KeyboardModifier.ShiftModifier:
+        if mods & ShiftModifier:
             indicators.append("S")
-        if mods & Qt.KeyboardModifier.ControlModifier:
+        if mods & ControlModifier:
             indicators.append("C")
-        if mods & Qt.KeyboardModifier.AltModifier:
+        if mods & AltModifier:
             indicators.append("A")
         return "-".join(indicators)
 
@@ -297,12 +318,14 @@ class BaseDisplay(QWidget):
 class TextDisplay(BaseDisplay):
     """A text display widget."""
 
-    # cache to hold chars drawing widths; cleaned when font changes
-    _char_drawing_widths_cache = {}
-
     def __init__(self, main_window, interactive=True, pane=None):
         super().__init__(interactive=interactive)
         self.main_window = main_window
+
+        # cache to hold chars drawing widths; cleaned when the font changes (per-instance as
+        # different displays may have different sizes)
+        self._char_drawing_widths_cache = {}
+
         # the EditorPane owning this display (None for the display-only strips); passed at
         # construction so it is always set with the right value
         self.pane = pane
@@ -325,7 +348,11 @@ class TextDisplay(BaseDisplay):
         # the (size, view_origin_row) self.lines was last actually built for by clear()
         self._lines_built_for = (self.display_size, self.view_origin_row)
 
-        self.set_font("Courier", 12)
+        # the font size Ctrl+0 (reset_font_zoom) restores, set only via set_base_font() -- Ctrl
+        # +/- (zoom_font) changes self.font's size directly and leaves this alone, so it never
+        # loses track of the real, editor-wide size while this one pane is zoomed
+        self._base_font_size = None
+        self.set_base_font("Courier", 12)
 
         self.cursor_pos = (0, 0)
         self.cursor_painter = lambda *a: None
@@ -350,6 +377,19 @@ class TextDisplay(BaseDisplay):
 
     def handle_keyboard(self, key_text, key, modifiers):
         """Handle keyboard events."""
+        # Ctrl +/-/0 zooms this pane's font instead of going to Neovim (checked before key_text
+        # below: some platforms still fill it in even with Ctrl held, e.g. Ctrl+= as '='). Shift
+        # is allowed alongside Ctrl (some layouts need it for '+'), Alt/Meta are not (so a genuine
+        # Ctrl-Alt-.../Ctrl-Meta-... combo is never swallowed here).
+        no_alt_or_meta = not modifiers & (AltModifier | MetaModifier)
+        if modifiers & ControlModifier and no_alt_or_meta and key in FONT_ZOOM_KEYS:
+            step = FONT_ZOOM_KEYS[key]
+            if step is None:
+                self.reset_font_zoom()
+            else:
+                self.zoom_font(step)
+            return
+
         # simple case when it's just unicode text
         if key_text:
             key_text = key_text.replace("<", "<LT>")
@@ -362,13 +402,13 @@ class TextDisplay(BaseDisplay):
             return
 
         parts = []
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
+        if modifiers & ControlModifier:
             parts.append("C")
-        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+        if modifiers & ShiftModifier:
             parts.append("S")
-        if modifiers & Qt.KeyboardModifier.AltModifier:
+        if modifiers & AltModifier:
             parts.append("A")
-        if modifiers & Qt.KeyboardModifier.MetaModifier:
+        if modifiers & MetaModifier:
             parts.append("D")  # 'D' often represents 'Command' in Mac
 
         parts.append(keyname)
@@ -392,8 +432,14 @@ class TextDisplay(BaseDisplay):
         self.lines = self._build_empty_logical_lines()
         self._lines_built_for = (self.display_size, self.view_origin_row)
 
-    def set_font(self, name, size):
-        """Set the font."""
+    def _apply_font_metrics(self, name, size):
+        """Update self.font/self.font_size to a new name+size, without resizing anything.
+
+        Split out of set_font() for zoom_font()/reset_font_zoom() (Ctrl +/-/0): those must NOT
+        resize this widget or the main window (see resize_view's force=True) -- the whole point
+        of a zoom is that the same on-screen pixel area now fits a different amount of Neovim
+        columns/rows, which is exactly what a fresh resize_editor_grid() figures out afterwards.
+        """
         # when requesting the font itself, round up the size, as it may not work
         # properly with non-ints
         self.font = QFont(name, math.ceil(size))
@@ -410,7 +456,46 @@ class TextDisplay(BaseDisplay):
         char_width = fm.horizontalAdvance("M")
         line_height = fm.height()
         self.font_size = FontSize(width=char_width, height=line_height, ascent=fm.ascent())
+
+    def set_font(self, name, size):
+        """Set the font."""
+        self._apply_font_metrics(name, size)
         self.resize_view(force=True)
+
+    def set_base_font(self, name, size):
+        """Set the font as this display's editor-wide base, then apply it.
+
+        Used for the actual editor-wide font (construction's hardcoded default, and Neovim's own
+        'guifont' via MainApp.set_editor_font) -- as opposed to zoom_font()/reset_font_zoom()
+        (Ctrl +/-/0), which change self.font's size directly and must NOT move what "reset" means.
+        """
+        self._base_font_size = size
+        self.set_font(name, size)
+
+    def zoom_font(self, step):
+        """Grow/shrink THIS display's font size only (Ctrl +/-), keeping the family untouched.
+
+        Scoped to this one pane on purpose: it changes self.font directly, not the editor-wide
+        base other tabs/detached windows pick up (see set_base_font), and it is only ever called
+        from this display's own handle_keyboard, so it can only ever affect the window the user
+        was actually typing into. The widget's on-screen pixel area is left exactly as it was --
+        only how many Neovim columns/rows fit in it changes, via resize_editor_grid() below (the
+        same call a real widget resize triggers); nothing here ever resizes the main window.
+        """
+        new_size = max(FONT_SIZE_MIN, min(FONT_SIZE_MAX, self.font.pointSizeF() + step))
+        if new_size == self.font.pointSizeF():
+            return
+        self._apply_font_metrics(self.font.family(), new_size)
+        self.main_window.resize_editor_grid(self)
+        self.main_window.show_font_size(self, new_size)
+
+    def reset_font_zoom(self):
+        """Undo this display's zoom (Ctrl+0), back to the editor-wide font size."""
+        if self._base_font_size is None or self.font.pointSizeF() == self._base_font_size:
+            return
+        self._apply_font_metrics(self.font.family(), self._base_font_size)
+        self.main_window.resize_editor_grid(self)
+        self.main_window.show_font_size(self, self._base_font_size)
 
     def resize_view(self, size=None, force=False):
         """Resize the display.
