@@ -1849,6 +1849,7 @@ def process_args(args):
         # always, we can find in the list, no need for more advanced algos)
         requested_paths = []
         for path in args.path:
+            path = os.path.realpath(path)
             if path not in requested_paths:
                 requested_paths.append(path)
 
@@ -1896,7 +1897,7 @@ async def main(event_loop, args, app_close_event):
                 paths_to_open.append(path)
         if not paths_to_open:
             # every requested path is already open elsewhere -> this instance does not start
-            logger.info("All requested paths handled by other Nysor instances; not starting")
+            logger.warning("All requested paths handled by other Nysor instances; not starting")
             return
     else:
         paths_to_open = requested_paths
