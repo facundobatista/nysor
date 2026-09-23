@@ -267,10 +267,6 @@ class MainMenu:
             ("&Close", "file__close_tab", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
             ("E&xit", "file__exit", {SCOPE_MAIN}),
         ],
-        "&Debug": [
-            ("Run a blocking call", "debug__blocking_call", {SCOPE_MAIN}),
-            ("Run an async task", "debug__async_task", {SCOPE_MAIN}),
-        ],
         "&Help": [
             ("Open &project page", "help__open_project_page", {SCOPE_MAIN, SCOPE_DETACHED}),
             ("Create a new &issue", "help__create_issue", {SCOPE_MAIN, SCOPE_DETACHED}),
@@ -433,21 +429,6 @@ class MainMenu:
     def _on__file__exit(self):
         """Exit the application."""
         self._app.close_gui()
-
-    @_log_action
-    def _on__debug__blocking_call(self):
-        """Test an action triggered by the GUI; this is a test/dev helper."""
-        logger.info("Code run in a standard function run from the GUI.")
-
-    @_log_action
-    def _on__debug__async_task(self):
-        """Run an async task; this is a test/dev helper."""
-
-        async def async_task():
-            result = await self._app.nvi.call("nvim_list_uis")
-            logger.info("Code run in an async task, listing UIs from Neovim: {}", result)
-
-        asyncio.create_task(async_task())
 
     @_log_action
     def _on__help__open_project_page(self):
