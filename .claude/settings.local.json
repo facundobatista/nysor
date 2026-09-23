@@ -19,7 +19,8 @@
       "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ python -m pytest*)",
       "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ env/bin/python -m pytest*)",
       "Skill(update-config)",
-      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ env/bin/ruff check nysor/main.py)"
+      "Bash(PATH=__TRACKED_VAR__/env/bin:__TRACKED_VAR__ env/bin/ruff check nysor/main.py)",
+      "Bash(git --no-pager diff --no-ext-diff --stat)"
     ]
   }
 }

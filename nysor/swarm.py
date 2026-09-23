@@ -10,6 +10,8 @@ import os
 import socket
 import struct
 
+import psutil
+
 logger = logging.getLogger(__name__)
 
 # unique port to dialog between swarm elements
@@ -20,10 +22,24 @@ DISCOVERY_PORT = 47890
 # increase the number for completely different conversations
 PREFIX = b"0:PATH:"
 PATH_NOT_FOUND = b"-"
+PATH_FOUND = b"+"
 
 # multicast group used only inside this machine.
 DISCOVERY_GROUP = "239.255.0.1"
 LOOPBACK = "127.0.0.1"
+
+
+def get_nysor_pids():
+    """Return the processes' id of all Nysor runs (including self)."""
+    nysor_pids = set()
+    for p in psutil.process_iter():
+        try:
+            name = p.name()
+            if name == "nysor" or (name.startswith("py") and "nysor" in p.cmdline()):
+                nysor_pids.add(p.pid)
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return nysor_pids
 
 
 def create_multicast_listener_socket():
@@ -65,12 +81,12 @@ class ListenerProtocol(asyncio.DatagramProtocol):
 
     def datagram_received(self, data, addr):
         """Process a received message."""
-        print("========== Listener recv", repr(data))
         if data[:self.prefix_len] == PREFIX:
             path = data[self.prefix_len:].decode("utf8")
             is_here = self.path_finder_callback(path)
             logger.debug("Swarm listener received a path to check: {!r} here={}", path, is_here)
-            resp = self.pid_bytes if is_here else PATH_NOT_FOUND
+            found_flag = PATH_FOUND if is_here else PATH_NOT_FOUND
+            resp = self.pid_bytes + b":" + found_flag
             self.transport.sendto(resp, addr)
         else:
             logger.debug("Swarm listener protocol; garbage? {!r}", data)
@@ -84,20 +100,44 @@ class DiscoverProtocol(asyncio.DatagramProtocol):
     """Protocol to discover other swarm elements."""
 
     def __init__(self):
-        self.responses = []
+        self.completed = asyncio.Event()
+        self.found = False
+
+        pid = os.getpid()
+        self.other_processes = get_nysor_pids() - {pid}
+
+        # short circuit: if we're the only Nysor, no need to wait anybody
+        if not self.other_processes:
+            logger.debug("Swarm discover short-circuit: self is the only process")
+            self.completed.set()
+
+    def _parse(self, data):
+        """Parse the received data."""
+        pid_b, found_flag = data.split(b":")
+        pid = int(pid_b.decode())
+        if found_flag == PATH_FOUND:
+            found = True
+        elif found_flag == PATH_NOT_FOUND:
+            found = False
+        else:
+            raise ValueError("bad flag")
+        return pid, found
 
     def datagram_received(self, data, addr):
         """Register responses."""
-        logger.debug("======= TEMP!!! discover recv {!r}", data)
-        if data == PATH_NOT_FOUND:
-            return
-
         try:
-            pid = int(data.decode())
+            pid, found = self._parse(data)
         except Exception:
             logger.debug("Swarm discover protocol; garbage? {!r}", data)
             return
-        self.responses.append(pid)
+
+        if found:
+            self.found = True
+            self.completed.set()
+        else:
+            self.other_processes.discard(pid)
+            if not self.other_processes:
+                self.completed.set()
 
     def error_received(self, exc):
         """Almost ignore errors."""
@@ -144,16 +184,17 @@ async def discover(loop, path):
     try:
         msg = PREFIX + path.encode("utf8")
         transport.sendto(msg, (DISCOVERY_GROUP, DISCOVERY_PORT))
-
-        # as we don't know who will be answering we just need to wait; 200 ms is a LOT
-        # of time for other processes to return, and barely noticeable for the human
-        # in the startup
-        await asyncio.sleep(0.2)
-        responses = protocol.responses
-
+        await asyncio.wait_for(protocol.completed.wait(), timeout=0.2)
+    except TimeoutError:
+        # not enough responses, and no success in any of responses got
+        logger.warning(
+            "Swarm discover timeout: these PIDs never answered: {}",
+            protocol.other_processes
+        )
+        return False
     finally:
         transport.close()
 
-    other_pids = [(resp != PATH_NOT_FOUND and resp) for resp in responses]
-    logger.debug("Swarm discover result: {} (total={})", other_pids, len(responses))
-    return other_pids
+    # all processes answered and nothing found, or fast-exit situation where it was found
+    logger.debug("Swarm discover result: {}", protocol.found)
+    return protocol.found

@@ -715,6 +715,7 @@ class MainApp(QMainWindow):
         super().__init__()
         self.setWindowIcon(QIcon(ICON_PATH))
         self.nysor_version = version
+        self.loop = loop
 
         self._closing = 0
         # a pane kept aside while its buffer is reopened, to re-attach to the new window
@@ -1500,22 +1501,19 @@ class MainApp(QMainWindow):
         display.last_grid_size = None
         self._send_grid_resize(display, grid_id=sibling.grid_id)
 
-    def _path_discover_cb(self, path):
+    def _path_discover_cb(self, path: str) -> bool:
         """Swarm callback: if we have the `path`, reveal its tab/window.
 
         Return True if we have it.
         """
         return self._reveal_path(path)
 
-    def _reveal_path(self, path):
-        """Bring the editor showing `path` to the front; return True if we have it, else False.
+    async def raise_to_visible(self, entry):
+        """Give visibility to the indicated pane/window.
 
         The editor may be a tab in the main window (select it and raise the main window) or a
         detached window (raise that one).
         """
-        entry = registry.get(filepath=path)
-        if entry is None:
-            return False
         window = self._detached.get(entry.pane)
         if window is not None:
             self._force_to_front(window)
@@ -1526,6 +1524,15 @@ class MainApp(QMainWindow):
             assert index != -1, "a registered, non-detached pane must be a tab"
             self.tabs.setCurrentIndex(index)
             self._force_to_front(self)
+
+    def _reveal_path(self, path: str) -> bool:
+        """Bring the editor showing `path` to the front; return True if we have it, else False."""
+        entry = registry.get(filepath=path)
+        if entry is None:
+            return False
+
+        # defer showing the window (which takes several milliseconds and quickly return)
+        self.loop.create_task(self.raise_to_visible(entry))
         return True
 
     def _force_to_front(self, window):
