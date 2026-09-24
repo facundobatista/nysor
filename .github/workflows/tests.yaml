@@ -19,7 +19,7 @@ jobs:
       nvim-versions: ${{ steps.versions.outputs.versions }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Read approved Neovim versions
         id: versions
@@ -43,7 +43,7 @@ jobs:
     steps:
 
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
