@@ -14,7 +14,7 @@ jobs:
     # single source of truth for approved Neovim versions: nysor/nvim_versions.py (also used by
     # the app itself at startup, see MainApp.setup_nvim) -- read here instead of duplicating the
     # list in this file, so they can never drift apart
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       nvim-versions: ${{ steps.versions.outputs.versions }}
     steps:
@@ -35,7 +35,7 @@ jobs:
     needs: generate-matrix
     strategy:
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, ubuntu-26.04, macos-15, macos-26]
         python-version: ["3.12", "3.13", "3.14"]
         nvim-version: ${{ fromJson(needs.generate-matrix.outputs.nvim-versions) }}
 
