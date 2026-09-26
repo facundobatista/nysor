@@ -40,7 +40,7 @@ from PyQt6.QtCore import Qt, QEvent, QSize, QTimer
 from PyQt6.QtGui import QIcon, QAction
 
 
-from nysor import swarm, nvim_versions
+from nysor import recent_files, swarm, nvim_versions
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications, registry
@@ -260,10 +260,12 @@ class MainMenu:
             ("S&ave as...", "file__save_as", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
             (None, None, None),
             ("&Reload", "file__reload", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
+
             # Detach/Re-attach share this slot: the main window only ever shows a tab (-> Detach),
             # a detached window only ever shows its own pane (-> Re-attach); never both at once
             ("&Detach", "window__detach", {SCOPE_MAIN, SCOPE_TAB}),
             ("R&e-attach", "window__reattach", {SCOPE_DETACHED}),
+
             ("&Close", "file__close_tab", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
             ("E&xit", "file__exit", {SCOPE_MAIN}),
         ],
@@ -292,6 +294,8 @@ class MainMenu:
                 continue
             menu = menu_bar.addMenu(title)
             self._fill(menu, entries)
+            if title == "&File" and "file__open" in self.actions:
+                self._add_open_recent_submenu(menu)
         self.apply_enable_state()
 
     def build_popup(self):
@@ -338,6 +342,28 @@ class MainMenu:
         # when closing the menu (e.g. via Esc); ensure the focus comes back to the window's
         # editor so typing reaches Neovim again
         menu.aboutToHide.connect(self._restore_editor_focus)
+
+    def _add_open_recent_submenu(self, menu):
+        """Insert a dynamically-populated 'Open Recent' submenu right after '&Open'."""
+        print("=========== add menu")
+        recent_menu = QMenu("Open &Recent", menu)
+        actions = menu.actions()
+        open_action = self.actions["file__open"]
+        before = actions[actions.index(open_action) + 1]
+        menu.insertMenu(before, recent_menu)
+        recent_menu.aboutToShow.connect(lambda: self._populate_open_recent(recent_menu))
+
+    def _populate_open_recent(self, recent_menu):
+        """Rebuild the 'Open Recent' submenu from disk, skipping paths that no longer exist."""
+        recent_menu.clear()
+        paths = [p for p in recent_files.get_recent() if os.path.exists(p)]
+        if not paths:
+            action = recent_menu.addAction("(no recent files)")
+            action.setEnabled(False)
+            return
+        for path in paths:
+            action = recent_menu.addAction(path)
+            action.triggered.connect(lambda checked=False, p=path: self._app.open_path(p))
 
     def apply_enable_state(self):
         """Enable/disable the state-dependent items for this menu's current target editor."""
@@ -1780,16 +1806,22 @@ class MainApp(QMainWindow):
         self.nvi.future_request("nvim_command", "tabnew")
 
     def open_file_dialog(self):
-        """Pick a file and open it, deduplicating locally first, then across instances.
-
-        The pick and the local check are synchronous (if the user cancels or we already show the
-        file, we never touch the async path); we only go async to ask the swarm when we actually
-        need to -- i.e. the file is not open here.
-        """
+        """Pick a file and open it (see `open_path` for the actual opening logic)."""
         filename, _ = QFileDialog.getOpenFileName(self, "Open File", "", "")
         if not filename:
             return
+        self.open_path(filename)
+
+    def open_path(self, filename):
+        """Open `filename`, deduplicating locally first, then across instances.
+
+        The local check is synchronous (if we already show the file, we never touch the async
+        path); we only go async to ask the swarm when we actually need to -- i.e. the file is not
+        open here. The path is registered as recently-opened regardless of where it ends up being
+        handled, since the user has definitively asked to open it at this point.
+        """
         filename = os.path.realpath(filename)  # normalize so path matching is consistent
+        recent_files.register(filename)
         if self._reveal_path(filename):
             return  # already open here -> just revealed its tab/window; no swarm round-trip
         call_async(self._open_if_free_in_swarm, filename)
