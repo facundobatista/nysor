@@ -12,6 +12,7 @@ tests/test_nvim_notifications.py builds a real NvimNotifications with a mocked h
 """
 
 import os
+import re
 
 import pytest
 from PyQt6.QtWidgets import QMenu
@@ -66,6 +67,32 @@ class TestOpenPath:
             fake_self._open_if_free_in_swarm, os.path.realpath(__file__))
 
 
+class TestOpenPathsFromCli:
+
+    async def test_registers_each_path_as_recent(self, mocker):
+        """Paths opened from the command line must show up in 'Recent' just like manual opens."""
+        fake_self = mocker.MagicMock()
+        fake_self._feed_neovim_from_path = mocker.AsyncMock()
+        register = mocker.patch("nysor.main.recent_files.register")
+
+        await MainApp._open_paths_from_cli(fake_self, ["/a", "/b"])
+
+        assert register.call_args_list == [mocker.call("/a"), mocker.call("/b")]
+
+    async def test_first_path_reuses_window_rest_open_new_tabs(self, mocker):
+        """The first path opens in the current window; subsequent ones open in new tabs."""
+        fake_self = mocker.MagicMock()
+        fake_self._feed_neovim_from_path = mocker.AsyncMock()
+        mocker.patch("nysor.main.recent_files.register")
+
+        await MainApp._open_paths_from_cli(fake_self, ["/a", "/b"])
+
+        fake_self._feed_neovim_from_path.assert_has_calls([
+            mocker.call("/a", new_tab=False),
+            mocker.call("/b", new_tab=True),
+        ])
+
+
 @pytest.fixture
 def main_menu(mocker):
     """A real MainMenu with mocked app/host, the same pattern used for NvimNotifications."""
@@ -87,36 +114,70 @@ class TestPopulateOpenRecent:
         """Only paths that still exist on disk are shown, most recent first."""
         existing = tmp_path / "here.txt"
         existing.write_text("x")
-        missing = str(tmp_path / "gone.txt")
+        missing = tmp_path / "gone.txt"
         mocker.patch(
-            "nysor.main.recent_files.get_recent", return_value=[str(existing), missing])
+            "nysor.main.recent_files.get_recent", return_value=[existing, missing])
 
         recent_menu = QMenu()
         main_menu._populate_open_recent(recent_menu)
 
         actions = recent_menu.actions()
-        assert [a.text() for a in actions] == [str(existing)]
+        assert [a.text() for a in actions] == ["here.txt"]
+
+    def test_label_is_filename_and_tooltip_is_directory(self, qapp, main_menu, mocker, tmp_path):
+        """The path is too long to show whole; the filename is the label, the dir a tooltip."""
+        existing = tmp_path / "here.txt"
+        existing.write_text("x")
+        mocker.patch("nysor.main.recent_files.get_recent", return_value=[existing])
+
+        recent_menu = QMenu()
+        main_menu._populate_open_recent(recent_menu)
+
+        action = recent_menu.actions()[0]
+        assert action.text() == "here.txt"
+        assert action.toolTip() == str(tmp_path)
 
     def test_clicking_an_entry_opens_that_path(self, qapp, main_menu, mocker, tmp_path):
         """Triggering a recent-file action opens that exact path via the app."""
         existing = tmp_path / "here.txt"
         existing.write_text("x")
-        mocker.patch("nysor.main.recent_files.get_recent", return_value=[str(existing)])
+        mocker.patch("nysor.main.recent_files.get_recent", return_value=[existing])
 
         recent_menu = QMenu()
         main_menu._populate_open_recent(recent_menu)
         recent_menu.actions()[0].trigger()
 
-        main_menu._app.open_path.assert_called_once_with(str(existing))
+        main_menu._app.open_path.assert_called_once_with(existing)
 
     def test_rebuilds_from_scratch_on_each_call(self, qapp, main_menu, mocker, tmp_path):
         """A second populate call does not accumulate stale entries from the first one."""
         existing = tmp_path / "here.txt"
         existing.write_text("x")
-        mocker.patch("nysor.main.recent_files.get_recent", return_value=[str(existing)])
+        mocker.patch("nysor.main.recent_files.get_recent", return_value=[existing])
 
         recent_menu = QMenu()
         main_menu._populate_open_recent(recent_menu)
         main_menu._populate_open_recent(recent_menu)
 
         assert len(recent_menu.actions()) == 1
+
+
+def _duplicate_mnemonics(labels):
+    """Return the mnemonic letters (after '&') that show up more than once among `labels`."""
+    letters = [re.search(r"&(\w)", label).group(1).upper() for label in labels]
+    return {letter for letter in letters if letters.count(letter) > 1}
+
+
+class TestMenuMnemonics:
+    """Two entries sharing a mnemonic (the letter after '&') make one unreachable via keyboard."""
+
+    @pytest.mark.parametrize("title", ["&File", "&Help"])
+    def test_submenu_entries_have_unique_mnemonics(self, title):
+        labels = [entry[0] for entry in MainMenu.MENU[title] if entry is not None]
+        duplicates = _duplicate_mnemonics(labels)
+        assert not duplicates, f"Repeated mnemonic(s) in {title!r} menu: {duplicates}"
+
+    def test_top_level_menus_have_unique_mnemonics(self):
+        """E.g. 'Fil&e' and 'H&elp' would both bind to 'E' -- one becomes unreachable."""
+        duplicates = _duplicate_mnemonics(MainMenu.MENU.keys())
+        assert not duplicates, f"Repeated mnemonic(s) among top-level menus: {duplicates}"

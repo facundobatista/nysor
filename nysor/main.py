@@ -262,7 +262,7 @@ class MainMenu:
         "&File": [
             ("&New", ACTION, "file__new", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
             ("&Open", ACTION, "file__open", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
-            ("&Recent", DYN_SUB_MENU, "_populate_open_recent", {SCOPE_MAIN}),
+            ("Recen&t", DYN_SUB_MENU, "_populate_open_recent", {SCOPE_MAIN}),
             None,
             ("&Save", ACTION, "file__save", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
             ("S&ave as...", ACTION, "file__save_as", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
@@ -376,13 +376,17 @@ class MainMenu:
     def _populate_open_recent(self, sub_menu):
         """Rebuild the 'Recent' submenu from disk, skipping paths that no longer exist."""
         sub_menu.clear()
-        paths = [p for p in recent_files.get_recent() if os.path.exists(p)]
+        sub_menu.setToolTipsVisible(True)
+        paths = [p for p in recent_files.get_recent() if p.exists()]
         if not paths:
             action = sub_menu.addAction("(no recent files)")
             action.setEnabled(False)
             return
         for path in paths:
-            action = sub_menu.addAction(path)
+            # the label is just the filename (the full path would be too long and unreadable);
+            # the directory is still available as a tooltip to disambiguate same-named files
+            action = sub_menu.addAction(path.name)
+            action.setToolTip(str(path.parent))
             action.triggered.connect(lambda checked=False, p=path: self._app.open_path(p))
 
     def apply_enable_state(self):
@@ -1648,9 +1652,14 @@ class MainApp(QMainWindow):
         if paths_to_open == SPECIAL_STDIN_PATH:
             await self._feed_neovim_from_stdin()
         else:
-            # first path opens in the current window; the rest open each in a new tabpage
-            for index, path in enumerate(paths_to_open):
-                await self._feed_neovim_from_path(path, new_tab=index > 0)
+            await self._open_paths_from_cli(paths_to_open)
+
+    async def _open_paths_from_cli(self, paths):
+        """Open each command-line path in Neovim, registering it as recently-opened."""
+        # first path opens in the current window; the rest open each in a new tabpage
+        for index, path in enumerate(paths):
+            recent_files.register(path)
+            await self._feed_neovim_from_path(path, new_tab=index > 0)
 
     async def _feed_neovim_from_stdin(self):
         """Feed neovim with data read from standard input."""

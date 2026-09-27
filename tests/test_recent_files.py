@@ -4,6 +4,7 @@
 
 import json
 import time
+from pathlib import Path
 
 import pytest
 
@@ -25,9 +26,9 @@ class TestGetRecent:
         assert recent_files.get_recent() == []
 
     def test_reads_existing_file(self, scope):
-        """A pre-existing file is read and returned as-is."""
+        """A pre-existing file is read and returned as Path objects."""
         scope.path.write_text(json.dumps(["/a", "/b"]))
-        assert recent_files.get_recent() == ["/a", "/b"]
+        assert recent_files.get_recent() == [Path("/a"), Path("/b")]
 
     def test_corrupt_file_returns_empty(self, scope):
         """Corrupt JSON is treated as no data, not raised."""
@@ -48,7 +49,7 @@ class TestGetRecent:
         recent_files.get_recent()
         time.sleep(0.01)  # force the mtime to actually tick past the previous write
         scope.path.write_text(json.dumps(["/a", "/b"]))
-        assert recent_files.get_recent() == ["/a", "/b"]
+        assert recent_files.get_recent() == [Path("/a"), Path("/b")]
 
 
 class TestRegister:
@@ -64,14 +65,14 @@ class TestRegister:
         """Registering adds new paths as the most recent one."""
         recent_files.register("/a")
         recent_files.register("/b")
-        assert recent_files.get_recent() == ["/b", "/a"]
+        assert recent_files.get_recent() == [Path("/b"), Path("/a")]
 
     def test_existing_path_moves_to_front_without_duplicating(self, scope):
         """Re-registering an already-known path just re-ranks it."""
         recent_files.register("/a")
         recent_files.register("/b")
         recent_files.register("/a")
-        assert recent_files.get_recent() == ["/a", "/b"]
+        assert recent_files.get_recent() == [Path("/a"), Path("/b")]
 
     def test_truncates_to_max_recent(self, scope, monkeypatch):
         """Only the most recent MAX_RECENT paths survive."""
@@ -79,10 +80,10 @@ class TestRegister:
         recent_files.register("/a")
         recent_files.register("/b")
         recent_files.register("/c")
-        assert recent_files.get_recent() == ["/c", "/b"]
+        assert recent_files.get_recent() == [Path("/c"), Path("/b")]
 
     def test_persisted_content_matches_cache(self, scope):
-        """What lands on disk is exactly what a fresh read would return."""
+        """What lands on disk (raw strings) matches a fresh read (as Path objects)."""
         recent_files.register("/a")
         on_disk = json.loads(scope.path.read_text())
-        assert on_disk == recent_files.get_recent()
+        assert on_disk == [str(p) for p in recent_files.get_recent()]

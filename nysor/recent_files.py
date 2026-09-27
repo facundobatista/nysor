@@ -56,8 +56,8 @@ def _load(scope):
 
 
 def get_recent(scope="general"):
-    """Return the scope's recent-files list, most recent first."""
-    return list(_load(scope))
+    """Return the scope's recent-files list, most recent first, as `Path`s."""
+    return [Path(f) for f in _load(scope)]
 
 
 def register(path, scope="general"):
