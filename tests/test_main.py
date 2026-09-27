@@ -72,24 +72,6 @@ def main_menu(mocker):
     return MainMenu(mocker.MagicMock(), mocker.MagicMock(), MainMenu.SCOPE_MAIN, lambda: None)
 
 
-class TestAddOpenRecentSubmenu:
-
-    def test_submenu_is_inserted_right_after_open(self, qapp, main_menu):
-        """The new submenu lands between '&Open' and whatever action followed it."""
-        menu = QMenu()
-        open_action = menu.addAction("&Open")
-        save_action = menu.addAction("&Save")
-        main_menu.actions["file__open"] = open_action
-
-        main_menu._add_open_recent_submenu(menu)
-
-        actions = menu.actions()
-        assert actions[0] is open_action
-        assert actions[1].menu() is not None
-        assert actions[1].menu().title() == "Open &Recent"
-        assert actions[2] is save_action
-
-
 class TestPopulateOpenRecent:
 
     def test_no_recent_files_shows_disabled_placeholder(self, qapp, main_menu, mocker):

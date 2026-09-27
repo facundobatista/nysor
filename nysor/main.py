@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import webbrowser
+from functools import partial
 from importlib.metadata import version, PackageNotFoundError
 from urllib.parse import urlencode
 
@@ -250,30 +251,42 @@ class MainMenu:
     SCOPE_TAB = 3
     SCOPE_OUTSIDE_TAB = 4
 
-    # (label, handler-suffix, scope); (None, None, None) is a separator
+    ACTION = 1
+    DYN_SUB_MENU = 2
+
+    # structure: (label, entry_type, actuator, scope); None is a separator
+    # - if it's a simple action, the actuator is the handler's suffix
+    # - if it's a sub-menu, the actuator is the function that fills it dynamically
+    # note we don't have "static sub menus" yet
     MENU = {
         "&File": [
-            ("&New", "file__new", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
-            ("&Open", "file__open", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
-            (None, None, None),
-            ("&Save", "file__save", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
-            ("S&ave as...", "file__save_as", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
-            (None, None, None),
-            ("&Reload", "file__reload", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
+            ("&New", ACTION, "file__new", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
+            ("&Open", ACTION, "file__open", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
+            ("&Recent", DYN_SUB_MENU, "_populate_open_recent", {SCOPE_MAIN}),
+            None,
+            ("&Save", ACTION, "file__save", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
+            ("S&ave as...", ACTION, "file__save_as", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
+            None,
+            ("&Reload", ACTION, "file__reload", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
 
             # Detach/Re-attach share this slot: the main window only ever shows a tab (-> Detach),
             # a detached window only ever shows its own pane (-> Re-attach); never both at once
-            ("&Detach", "window__detach", {SCOPE_MAIN, SCOPE_TAB}),
-            ("R&e-attach", "window__reattach", {SCOPE_DETACHED}),
+            ("&Detach", ACTION, "window__detach", {SCOPE_MAIN, SCOPE_TAB}),
+            ("R&e-attach", ACTION, "window__reattach", {SCOPE_DETACHED}),
 
-            ("&Close", "file__close_tab", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
-            ("E&xit", "file__exit", {SCOPE_MAIN}),
+            ("&Close", ACTION, "file__close_tab", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
+            ("E&xit", ACTION, "file__exit", {SCOPE_MAIN}),
         ],
         "&Help": [
-            ("Open &project page", "help__open_project_page", {SCOPE_MAIN, SCOPE_DETACHED}),
-            ("Create a new &issue", "help__create_issue", {SCOPE_MAIN, SCOPE_DETACHED}),
-            (None, None, None),
-            ("&About Nysor", "help__about", {SCOPE_MAIN, SCOPE_DETACHED}),
+            (
+                "Open &project page",
+                ACTION,
+                "help__open_project_page",
+                {SCOPE_MAIN, SCOPE_DETACHED},
+            ),
+            ("Create a new &issue", ACTION, "help__create_issue", {SCOPE_MAIN, SCOPE_DETACHED}),
+            None,
+            ("&About Nysor", ACTION, "help__about", {SCOPE_MAIN, SCOPE_DETACHED}),
         ],
     }
 
@@ -282,7 +295,7 @@ class MainMenu:
         self._host = host  # the QMainWindow this menu belongs to (its focus returns here on close)
         self._scope = scope
         self._target = target  # callable -> the GridEntry the entry-scoped actions act on
-        self.actions = {}
+        self.menu_actions = {}
 
     def attach_bar(self):
         """Build a persistent menu bar on this menu's host window (SCOPE_MAIN / SCOPE_DETACHED)."""
@@ -294,8 +307,6 @@ class MainMenu:
                 continue
             menu = menu_bar.addMenu(title)
             self._fill(menu, entries)
-            if title == "&File" and "file__open" in self.actions:
-                self._add_open_recent_submenu(menu)
         self.apply_enable_state()
 
     def build_popup(self):
@@ -309,8 +320,49 @@ class MainMenu:
 
     def _in_scope(self, entry):
         """Whether a MENU entry (or a separator, scopes=None) belongs to this menu's scope."""
-        _label, _name, scopes = entry
-        return scopes is None or self._scope in scopes
+        if entry is None:
+            return True
+        _, _, _, scopes = entry
+        return self._scope in scopes
+
+    def _fill(self, menu, entries):
+        """Add entries to a menu, dropping leading/trailing/double separators left by filtering."""
+        have_entry = False  # a real action seen since the last separator
+        pending_sep = False
+        for entry in entries:
+            # instead of just adding a separator when the entry is None, we do this dance in case
+            # there are no entries in the scope, to not add double separators, or one at the very
+            # start or the very end
+            if entry is None:
+                if have_entry:
+                    pending_sep, have_entry = True, False
+                continue
+            if pending_sep:
+                menu.addSeparator()
+                pending_sep = False
+            have_entry = True
+
+            label, entry_type, actuator, _scopes = entry
+            if entry_type == self.ACTION:
+                # simple menu entry, the actuator is the handler's suffix
+                action = QAction(label, menu)
+                action.triggered.connect(getattr(self, f"_on__{actuator}"))
+                self.menu_actions[label] = action
+                menu.addAction(action)
+
+            elif entry_type == self.DYN_SUB_MENU:
+                # a dynamic sub-menu; the actuator is the name of the function that fills it
+                sub_menu = QMenu(label, menu)
+                func = getattr(self, actuator)
+                sub_menu.aboutToShow.connect(partial(func, sub_menu))
+                menu.addMenu(sub_menu)
+
+            else:
+                logger.error("Bad menu entry type: {!r}", entry_type)
+
+        # when closing the menu (e.g. via Esc); ensure the focus comes back to the window's
+        # editor so typing reaches Neovim again
+        menu.aboutToHide.connect(self._restore_editor_focus)
 
     def _restore_editor_focus(self):
         """Return focus to the active editor once the closing menu is gone.
@@ -321,65 +373,33 @@ class MainMenu:
         """
         QTimer.singleShot(0, self._app.focus_active_editor)
 
-    def _fill(self, menu, entries):
-        """Add entries to a menu, dropping leading/trailing/double separators left by filtering."""
-        have_action = False  # a real action seen since the last separator
-        pending_sep = False
-        for label, name, _scopes in entries:
-            if name is None:
-                if have_action:
-                    pending_sep, have_action = True, False
-                continue
-            if pending_sep:
-                menu.addSeparator()
-                pending_sep = False
-            action = QAction(label, menu)
-            action.triggered.connect(getattr(self, f"_on__{name}"))
-            self.actions[name] = action
-            menu.addAction(action)
-            have_action = True
-
-        # when closing the menu (e.g. via Esc); ensure the focus comes back to the window's
-        # editor so typing reaches Neovim again
-        menu.aboutToHide.connect(self._restore_editor_focus)
-
-    def _add_open_recent_submenu(self, menu):
-        """Insert a dynamically-populated 'Open Recent' submenu right after '&Open'."""
-        print("=========== add menu")
-        recent_menu = QMenu("Open &Recent", menu)
-        actions = menu.actions()
-        open_action = self.actions["file__open"]
-        before = actions[actions.index(open_action) + 1]
-        menu.insertMenu(before, recent_menu)
-        recent_menu.aboutToShow.connect(lambda: self._populate_open_recent(recent_menu))
-
-    def _populate_open_recent(self, recent_menu):
-        """Rebuild the 'Open Recent' submenu from disk, skipping paths that no longer exist."""
-        recent_menu.clear()
+    def _populate_open_recent(self, sub_menu):
+        """Rebuild the 'Recent' submenu from disk, skipping paths that no longer exist."""
+        sub_menu.clear()
         paths = [p for p in recent_files.get_recent() if os.path.exists(p)]
         if not paths:
-            action = recent_menu.addAction("(no recent files)")
+            action = sub_menu.addAction("(no recent files)")
             action.setEnabled(False)
             return
         for path in paths:
-            action = recent_menu.addAction(path)
+            action = sub_menu.addAction(path)
             action.triggered.connect(lambda checked=False, p=path: self._app.open_path(p))
 
     def apply_enable_state(self):
         """Enable/disable the state-dependent items for this menu's current target editor."""
         entry = self._target()
         modified = entry is not None and entry.pane.modified
-        if "file__save" in self.actions:
-            self.actions["file__save"].setEnabled(modified)
-        if "file__reload" in self.actions:
+        if "&Save" in self.menu_actions:
+            self.menu_actions["&Save"].setEnabled(modified)
+        if "&Reload" in self.menu_actions:
             # Reload reverts to the saved file, so only for a modified, named buffer
             named = entry is not None and bool(entry.filepath)
-            self.actions["file__reload"].setEnabled(modified and named)
-        if "file__open" in self.actions:
-            self.actions["file__open"].setEnabled(not modified)
-        if "window__detach" in self.actions:
+            self.menu_actions["&Reload"].setEnabled(modified and named)
+        if "&Open" in self.menu_actions:
+            self.menu_actions["&Open"].setEnabled(not modified)
+        if "&Detach" in self.menu_actions:
             # detaching the main window's only tab would leave its strip empty
-            self.actions["window__detach"].setEnabled(self._app.tabs.count() > 1)
+            self.menu_actions["&Detach"].setEnabled(self._app.tabs.count() > 1)
 
     def _log_action(func):
         """Log the action indicate by the user."""
