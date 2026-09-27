@@ -118,6 +118,7 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 These are the items lousely grouped to get there:
 
 **For 0.9:**
+- Check missing low-bar replacement
 - FIXME.94 allow logging system to use `logger.trace`
 - allow double-level logging (user selected to terminal, debug to a file if configured)
 - docs/2026-08-24-optimizations.md
