@@ -277,6 +277,10 @@ class MainMenu:
             ("&Close", ACTION, "file__close_tab", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
             ("E&xit", ACTION, "file__exit", {SCOPE_MAIN}),
         ],
+        "&Edit": [
+            ("&Undo", ACTION, "edit__undo", {SCOPE_MAIN, SCOPE_DETACHED}),
+            ("Re&do", ACTION, "edit__redo", {SCOPE_MAIN, SCOPE_DETACHED}),
+        ],
         "&Help": [
             (
                 "Open &project page",
@@ -307,6 +311,11 @@ class MainMenu:
                 continue
             menu = menu_bar.addMenu(title)
             self._fill(menu, entries)
+            if title == "&Edit":
+                # Undo/Redo availability lives in Neovim's undo tree, not in any state we cache
+                # locally, so it's fetched fresh (a round trip) each time this menu is opened
+                # rather than kept current at all times
+                menu.aboutToShow.connect(lambda: call_async(self._refresh_undo_redo_state))
         self.apply_enable_state()
 
     def build_popup(self):
@@ -388,6 +397,12 @@ class MainMenu:
             action = sub_menu.addAction(path.name)
             action.setToolTip(str(path.parent))
             action.triggered.connect(lambda checked=False, p=path: self._app.open_path(p))
+
+    async def _refresh_undo_redo_state(self):
+        """Ask Neovim whether the target editor can undo/redo, and enable those items to match."""
+        can_undo, can_redo = await self._app.get_undo_redo_state(self._target())
+        self.menu_actions["&Undo"].setEnabled(can_undo)
+        self.menu_actions["Re&do"].setEnabled(can_redo)
 
     def apply_enable_state(self):
         """Enable/disable the state-dependent items for this menu's current target editor."""
@@ -479,6 +494,18 @@ class MainMenu:
     def _on__file__exit(self):
         """Exit the application."""
         self._app.close_gui()
+
+    @_log_action
+    @_activate_target
+    def _on__edit__undo(self):
+        """Undo the last change in the target editor."""
+        self._app.undo_entry(self._target())
+
+    @_log_action
+    @_activate_target
+    def _on__edit__redo(self):
+        """Redo the last undone change in the target editor."""
+        self._app.redo_entry(self._target())
 
     @_log_action
     def _on__help__open_project_page(self):
@@ -1284,6 +1311,37 @@ class MainApp(QMainWindow):
             end)
         """
         self.nvi.future_request("nvim_exec_lua", _code, [entry.win_id, filename])
+
+    def undo_entry(self, entry):
+        """Undo the last change in a tab's buffer."""
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request("nvim_call_function", "win_execute", [entry.win_id, "undo"])
+
+    def redo_entry(self, entry):
+        """Redo the last undone change in a tab's buffer."""
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request("nvim_call_function", "win_execute", [entry.win_id, "redo"])
+
+    async def get_undo_redo_state(self, entry):
+        """Return (can_undo, can_redo) for a tab's buffer, from Neovim's own undo tree.
+
+        seq_cur is this buffer's position in its undo tree; 0 is the original, pre-edit state
+        (nothing to undo), and seq_last is the highest sequence number reached so far (below it,
+        there is a later state to redo into).
+        """
+        if entry is None or entry.win_id is None:
+            return False, False
+        _code = """
+            local win = ...
+            return vim.api.nvim_win_call(win, function()
+                local info = vim.fn.undotree()
+                return {info.seq_cur, info.seq_last}
+            end)
+        """
+        seq_cur, seq_last = await self.nvi.call("nvim_exec_lua", _code, [entry.win_id])
+        return seq_cur > 0, seq_cur < seq_last
 
     def mark_active_grid(self, grid_id):
         """Record which grid Neovim just made current (called from win_pos, before its tab exists).

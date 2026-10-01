@@ -93,6 +93,69 @@ class TestOpenPathsFromCli:
         ])
 
 
+class TestUndoEntry:
+
+    def test_none_entry_does_nothing(self, mocker):
+        """No target editor -> no RPC sent."""
+        fake_self = mocker.MagicMock()
+        MainApp.undo_entry(fake_self, None)
+        fake_self.nvi.future_request.assert_not_called()
+
+    def test_sends_undo_to_the_entrys_window(self, mocker):
+        """'undo' is run in the context of the target's own window."""
+        fake_self = mocker.MagicMock()
+        entry = mocker.MagicMock(win_id=42)
+        MainApp.undo_entry(fake_self, entry)
+        fake_self.nvi.future_request.assert_called_once_with(
+            "nvim_call_function", "win_execute", [42, "undo"])
+
+
+class TestRedoEntry:
+
+    def test_none_entry_does_nothing(self, mocker):
+        """No target editor -> no RPC sent."""
+        fake_self = mocker.MagicMock()
+        MainApp.redo_entry(fake_self, None)
+        fake_self.nvi.future_request.assert_not_called()
+
+    def test_sends_redo_to_the_entrys_window(self, mocker):
+        """'redo' is run in the context of the target's own window."""
+        fake_self = mocker.MagicMock()
+        entry = mocker.MagicMock(win_id=42)
+        MainApp.redo_entry(fake_self, entry)
+        fake_self.nvi.future_request.assert_called_once_with(
+            "nvim_call_function", "win_execute", [42, "redo"])
+
+
+class TestGetUndoRedoState:
+
+    async def test_none_entry_can_do_neither(self, mocker):
+        """No target editor -> nothing to undo or redo."""
+        fake_self = mocker.MagicMock()
+        assert await MainApp.get_undo_redo_state(fake_self, None) == (False, False)
+
+    async def test_at_oldest_change_cannot_undo(self, mocker):
+        """seq_cur == 0 means the buffer is already at its original, pre-edit state."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value=[0, 5])
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_undo_redo_state(fake_self, entry) == (False, True)
+
+    async def test_at_newest_change_cannot_redo(self, mocker):
+        """seq_cur == seq_last means there is no later state to redo into."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value=[5, 5])
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_undo_redo_state(fake_self, entry) == (True, False)
+
+    async def test_mid_history_can_do_both(self, mocker):
+        """Somewhere between the oldest and newest change, both directions are open."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value=[3, 5])
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_undo_redo_state(fake_self, entry) == (True, True)
+
+
 @pytest.fixture
 def main_menu(mocker):
     """A real MainMenu with mocked app/host, the same pattern used for NvimNotifications."""
@@ -162,6 +225,21 @@ class TestPopulateOpenRecent:
         assert len(recent_menu.actions()) == 1
 
 
+class TestRefreshUndoRedoState:
+
+    async def test_enables_actions_per_the_apps_report(self, main_menu, mocker):
+        """Undo/Redo are enabled or disabled to match what the app reports for the target."""
+        undo_action = mocker.MagicMock()
+        redo_action = mocker.MagicMock()
+        main_menu.menu_actions = {"&Undo": undo_action, "Re&do": redo_action}
+        main_menu._app.get_undo_redo_state = mocker.AsyncMock(return_value=(True, False))
+
+        await main_menu._refresh_undo_redo_state()
+
+        undo_action.setEnabled.assert_called_once_with(True)
+        redo_action.setEnabled.assert_called_once_with(False)
+
+
 def _duplicate_mnemonics(labels):
     """Return the mnemonic letters (after '&') that show up more than once among `labels`."""
     letters = [re.search(r"&(\w)", label).group(1).upper() for label in labels]
@@ -171,7 +249,7 @@ def _duplicate_mnemonics(labels):
 class TestMenuMnemonics:
     """Two entries sharing a mnemonic (the letter after '&') make one unreachable via keyboard."""
 
-    @pytest.mark.parametrize("title", ["&File", "&Help"])
+    @pytest.mark.parametrize("title", ["&File", "&Edit", "&Help"])
     def test_submenu_entries_have_unique_mnemonics(self, title):
         labels = [entry[0] for entry in MainMenu.MENU[title] if entry is not None]
         duplicates = _duplicate_mnemonics(labels)
