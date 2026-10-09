@@ -24,7 +24,7 @@ requires-python = ">=3.12"
 dependencies = [
     "PyQt6==6.11.0",
     "foffinf==0.4",
-    "msgpack==1.2.2",
+    "msgpack==1.2.3",
     "platformdirs==4.12.1",
     "psutil==7.2.2",
     "qasync==0.28.0",
