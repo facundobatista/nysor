@@ -468,32 +468,32 @@ class MainMenu:
         """Open a file (deduplicated across instances; see MainApp.open_file_dialog)."""
         self._app.open_file_dialog()
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__file__save(self):
         """Save the target editor, asking for a name if it does not have one yet."""
         self._app.save_entry(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__file__save_as(self):
         """Save the target editor to a new file."""
         self._app.save_entry_as(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__file__reload(self):
         """Revert the target editor to the saved file, dropping unsaved changes (asks first)."""
         call_async(self._app.reload, self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__window__detach(self):
         """Pull the target tab out into its own detached window."""
         self._app.detach_tab(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__window__reattach(self):
         """Move the target (detached) editor back into the main window as a tab."""
         self._app.reattach_pane(self._target())
@@ -508,32 +508,32 @@ class MainMenu:
         """Exit the application."""
         self._app.close_gui()
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__edit__undo(self):
         """Undo the last change in the target editor."""
         self._app.undo_entry(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__edit__redo(self):
         """Redo the last undone change in the target editor."""
         self._app.redo_entry(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__edit__cut(self):
         """Cut the target editor's active visual selection to the system clipboard."""
         self._app.cut_entry(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__edit__copy(self):
         """Copy the target editor's active visual selection to the system clipboard."""
         self._app.copy_entry(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__edit__paste(self):
         """Paste the system clipboard after the cursor in the target editor."""
         self._app.paste_entry(self._target())
