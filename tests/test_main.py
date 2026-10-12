@@ -93,6 +93,156 @@ class TestOpenPathsFromCli:
         ])
 
 
+class TestUndoEntry:
+
+    def test_none_entry_does_nothing(self, mocker):
+        """No target editor -> no RPC sent."""
+        fake_self = mocker.MagicMock()
+        MainApp.undo_entry(fake_self, None)
+        fake_self.nvi.future_request.assert_not_called()
+
+    def test_sends_undo_to_the_entrys_window(self, mocker):
+        """'undo' is run in the context of the target's own window."""
+        fake_self = mocker.MagicMock()
+        entry = mocker.MagicMock(win_id=42)
+        MainApp.undo_entry(fake_self, entry)
+        fake_self.nvi.future_request.assert_called_once_with(
+            "nvim_call_function", "win_execute", [42, "undo"])
+
+
+class TestRedoEntry:
+
+    def test_none_entry_does_nothing(self, mocker):
+        """No target editor -> no RPC sent."""
+        fake_self = mocker.MagicMock()
+        MainApp.redo_entry(fake_self, None)
+        fake_self.nvi.future_request.assert_not_called()
+
+    def test_sends_redo_to_the_entrys_window(self, mocker):
+        """'redo' is run in the context of the target's own window."""
+        fake_self = mocker.MagicMock()
+        entry = mocker.MagicMock(win_id=42)
+        MainApp.redo_entry(fake_self, entry)
+        fake_self.nvi.future_request.assert_called_once_with(
+            "nvim_call_function", "win_execute", [42, "redo"])
+
+
+class TestGetUndoRedoState:
+
+    async def test_none_entry_can_do_neither(self, mocker):
+        """No target editor -> nothing to undo or redo."""
+        fake_self = mocker.MagicMock()
+        assert await MainApp.get_undo_redo_state(fake_self, None) == (False, False)
+
+    async def test_at_oldest_change_cannot_undo(self, mocker):
+        """seq_cur == 0 means the buffer is already at its original, pre-edit state."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value=[0, 5])
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_undo_redo_state(fake_self, entry) == (False, True)
+
+    async def test_at_newest_change_cannot_redo(self, mocker):
+        """seq_cur == seq_last means there is no later state to redo into."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value=[5, 5])
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_undo_redo_state(fake_self, entry) == (True, False)
+
+    async def test_mid_history_can_do_both(self, mocker):
+        """Somewhere between the oldest and newest change, both directions are open."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value=[3, 5])
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_undo_redo_state(fake_self, entry) == (True, True)
+
+
+class TestCutEntry:
+
+    def test_none_entry_does_nothing(self, mocker):
+        """No target editor -> no RPC sent."""
+        fake_self = mocker.MagicMock()
+        MainApp.cut_entry(fake_self, None)
+        fake_self.nvi.future_request.assert_not_called()
+
+    def test_reselects_and_deletes_into_the_clipboard_register(self, mocker):
+        """'gv' restores the last selection (any kind) before deleting it into '+'."""
+        fake_self = mocker.MagicMock()
+        entry = mocker.MagicMock(win_id=42)
+        MainApp.cut_entry(fake_self, entry)
+        fake_self.nvi.future_request.assert_called_once_with(
+            "nvim_call_function", "win_execute", [42, 'normal! gv"+d'])
+
+
+class TestCopyEntry:
+
+    def test_none_entry_does_nothing(self, mocker):
+        """No target editor -> no RPC sent."""
+        fake_self = mocker.MagicMock()
+        MainApp.copy_entry(fake_self, None)
+        fake_self.nvi.future_request.assert_not_called()
+
+    def test_reselects_and_yanks_into_the_clipboard_register(self, mocker):
+        """'gv' restores the last selection (any kind) before yanking it into '+'."""
+        fake_self = mocker.MagicMock()
+        entry = mocker.MagicMock(win_id=42)
+        MainApp.copy_entry(fake_self, entry)
+        fake_self.nvi.future_request.assert_called_once_with(
+            "nvim_call_function", "win_execute", [42, 'normal! gv"+y'])
+
+
+class TestPasteEntry:
+
+    def test_none_entry_does_nothing(self, mocker):
+        """No target editor -> no RPC sent."""
+        fake_self = mocker.MagicMock()
+        MainApp.paste_entry(fake_self, None)
+        fake_self.nvi.future_request.assert_not_called()
+
+    def test_pastes_the_clipboard_register(self, mocker):
+        """No selection is involved; it's just a plain paste of the '+' register."""
+        fake_self = mocker.MagicMock()
+        entry = mocker.MagicMock(win_id=42)
+        MainApp.paste_entry(fake_self, entry)
+        fake_self.nvi.future_request.assert_called_once_with(
+            "nvim_call_function", "win_execute", [42, 'normal! "+p'])
+
+
+class TestGetVisualSelectionActive:
+
+    async def test_none_entry_is_never_active(self, mocker):
+        """No target editor -> no selection to speak of."""
+        fake_self = mocker.MagicMock()
+        assert await MainApp.get_visual_selection_active(fake_self, None) is False
+
+    async def test_normal_mode_is_not_active(self, mocker):
+        """Plain Normal mode has no selection."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value={"mode": "n", "blocking": False})
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_visual_selection_active(fake_self, entry) is False
+
+    async def test_charwise_visual_is_active(self, mocker):
+        """Lowercase 'v' is charwise Visual mode."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value={"mode": "v", "blocking": False})
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_visual_selection_active(fake_self, entry) is True
+
+    async def test_linewise_visual_is_active(self, mocker):
+        """Uppercase 'V' is linewise Visual mode."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value={"mode": "V", "blocking": False})
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_visual_selection_active(fake_self, entry) is True
+
+    async def test_blockwise_visual_is_active(self, mocker):
+        """Ctrl-V ('\\x16') is blockwise Visual mode."""
+        fake_self = mocker.MagicMock()
+        fake_self.nvi.call = mocker.AsyncMock(return_value={"mode": "\x16", "blocking": False})
+        entry = mocker.MagicMock(win_id=42)
+        assert await MainApp.get_visual_selection_active(fake_self, entry) is True
+
+
 @pytest.fixture
 def main_menu(mocker):
     """A real MainMenu with mocked app/host, the same pattern used for NvimNotifications."""
@@ -162,6 +312,41 @@ class TestPopulateOpenRecent:
         assert len(recent_menu.actions()) == 1
 
 
+class TestRefreshEditMenuState:
+
+    @pytest.fixture
+    def menu_actions(self, main_menu, mocker):
+        """Stand-in QAction mocks for the four state-dependent Edit entries."""
+        actions = {
+            "&Undo": mocker.MagicMock(),
+            "Re&do": mocker.MagicMock(),
+            "Cu&t": mocker.MagicMock(),
+            "&Copy": mocker.MagicMock(),
+        }
+        main_menu.menu_actions = actions
+        return actions
+
+    async def test_enables_undo_redo_per_the_apps_report(self, main_menu, menu_actions, mocker):
+        """Undo/Redo are enabled or disabled to match what the app reports for the target."""
+        main_menu._app.get_undo_redo_state = mocker.AsyncMock(return_value=(True, False))
+        main_menu._app.get_visual_selection_active = mocker.AsyncMock(return_value=False)
+
+        await main_menu._refresh_edit_menu_state()
+
+        menu_actions["&Undo"].setEnabled.assert_called_once_with(True)
+        menu_actions["Re&do"].setEnabled.assert_called_once_with(False)
+
+    async def test_enables_cut_copy_per_the_apps_report(self, main_menu, menu_actions, mocker):
+        """Cut/Copy are enabled together, based on whether there is an active selection."""
+        main_menu._app.get_undo_redo_state = mocker.AsyncMock(return_value=(False, False))
+        main_menu._app.get_visual_selection_active = mocker.AsyncMock(return_value=True)
+
+        await main_menu._refresh_edit_menu_state()
+
+        menu_actions["Cu&t"].setEnabled.assert_called_once_with(True)
+        menu_actions["&Copy"].setEnabled.assert_called_once_with(True)
+
+
 def _duplicate_mnemonics(labels):
     """Return the mnemonic letters (after '&') that show up more than once among `labels`."""
     letters = [re.search(r"&(\w)", label).group(1).upper() for label in labels]
@@ -171,9 +356,10 @@ def _duplicate_mnemonics(labels):
 class TestMenuMnemonics:
     """Two entries sharing a mnemonic (the letter after '&') make one unreachable via keyboard."""
 
-    @pytest.mark.parametrize("title", ["&File", "&Help"])
+    @pytest.mark.parametrize("title", ["&File", "&Edit", "&Help"])
     def test_submenu_entries_have_unique_mnemonics(self, title):
-        labels = [entry[0] for entry in MainMenu.MENU[title] if entry is not None]
+        options, _ = MainMenu.MENU[title]
+        labels = [entry[0] for entry in options if entry is not None]
         duplicates = _duplicate_mnemonics(labels)
         assert not duplicates, f"Repeated mnemonic(s) in {title!r} menu: {duplicates}"
 

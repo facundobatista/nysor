@@ -259,7 +259,7 @@ class MainMenu:
     # - if it's a sub-menu, the actuator is the function that fills it dynamically
     # note we don't have "static sub menus" yet
     MENU = {
-        "&File": [
+        "&File": ([
             ("&New", ACTION, "file__new", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
             ("&Open", ACTION, "file__open", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
             ("Recen&t", DYN_SUB_MENU, "_populate_open_recent", {SCOPE_MAIN}),
@@ -276,8 +276,16 @@ class MainMenu:
 
             ("&Close", ACTION, "file__close_tab", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
             ("E&xit", ACTION, "file__exit", {SCOPE_MAIN}),
-        ],
-        "&Help": [
+        ], None),
+        "&Edit": ([
+            ("&Undo", ACTION, "edit__undo", {SCOPE_MAIN, SCOPE_DETACHED}),
+            ("Re&do", ACTION, "edit__redo", {SCOPE_MAIN, SCOPE_DETACHED}),
+            None,
+            ("Cu&t", ACTION, "edit__cut", {SCOPE_MAIN, SCOPE_DETACHED}),
+            ("&Copy", ACTION, "edit__copy", {SCOPE_MAIN, SCOPE_DETACHED}),
+            ("&Paste", ACTION, "edit__paste", {SCOPE_MAIN, SCOPE_DETACHED}),
+        ], "_refresh_edit_menu_state"),
+        "&Help": ([
             (
                 "Open &project page",
                 ACTION,
@@ -287,7 +295,7 @@ class MainMenu:
             ("Create a new &issue", ACTION, "help__create_issue", {SCOPE_MAIN, SCOPE_DETACHED}),
             None,
             ("&About Nysor", ACTION, "help__about", {SCOPE_MAIN, SCOPE_DETACHED}),
-        ],
+        ], None),
     }
 
     def __init__(self, app, host, scope, target):
@@ -300,20 +308,24 @@ class MainMenu:
     def attach_bar(self):
         """Build a persistent menu bar on this menu's host window (SCOPE_MAIN / SCOPE_DETACHED)."""
         menu_bar = self._host.menuBar()
-        for title, options in self.MENU.items():
+        for title, (options, refresh_func_name) in self.MENU.items():
             entries = [entry for entry in options if self._in_scope(entry)]
             if not entries:
                 # every real entry was filtered out -> do not add an empty menu
                 continue
             menu = menu_bar.addMenu(title)
             self._fill(menu, entries)
+            if refresh_func_name is not None:
+                func = getattr(self, refresh_func_name)
+                menu.aboutToShow.connect(lambda: call_async(func))
         self.apply_enable_state()
 
     def build_popup(self):
         """Build a transient context menu (SCOPE_TAB) on the host window; the caller exec()s it."""
         menu = QMenu(self._host)
         # only the File entries carry SCOPE_TAB
-        entries = [entry for entry in self.MENU["&File"] if self._in_scope(entry)]
+        options, _ = self.MENU["&File"]
+        entries = [entry for entry in options if self._in_scope(entry)]
         self._fill(menu, entries)
         self.apply_enable_state()
         return menu
@@ -389,6 +401,22 @@ class MainMenu:
             action.setToolTip(str(path.parent))
             action.triggered.connect(lambda checked=False, p=path: self._app.open_path(p))
 
+    async def _refresh_edit_menu_state(self):
+        """Ask Neovim for some targets' state, enabling items to match.
+
+        This is because Undo/Redo/Cut/Copy availability lives in Neovim's own state (undo tree,
+        current mode, selections), not in anything we cache locally, so it's fetched fresh each
+        time this menu is opened rather than kept current at all times
+        """
+        entry = self._target()
+        can_undo, can_redo = await self._app.get_undo_redo_state(entry)
+        self.menu_actions["&Undo"].setEnabled(can_undo)
+        self.menu_actions["Re&do"].setEnabled(can_redo)
+
+        has_selection = await self._app.get_visual_selection_active(entry)
+        self.menu_actions["Cu&t"].setEnabled(has_selection)
+        self.menu_actions["&Copy"].setEnabled(has_selection)
+
     def apply_enable_state(self):
         """Enable/disable the state-dependent items for this menu's current target editor."""
         entry = self._target()
@@ -440,32 +468,32 @@ class MainMenu:
         """Open a file (deduplicated across instances; see MainApp.open_file_dialog)."""
         self._app.open_file_dialog()
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__file__save(self):
         """Save the target editor, asking for a name if it does not have one yet."""
         self._app.save_entry(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__file__save_as(self):
         """Save the target editor to a new file."""
         self._app.save_entry_as(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__file__reload(self):
         """Revert the target editor to the saved file, dropping unsaved changes (asks first)."""
         call_async(self._app.reload, self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__window__detach(self):
         """Pull the target tab out into its own detached window."""
         self._app.detach_tab(self._target())
 
-    @_log_action
     @_activate_target
+    @_log_action
     def _on__window__reattach(self):
         """Move the target (detached) editor back into the main window as a tab."""
         self._app.reattach_pane(self._target())
@@ -479,6 +507,36 @@ class MainMenu:
     def _on__file__exit(self):
         """Exit the application."""
         self._app.close_gui()
+
+    @_activate_target
+    @_log_action
+    def _on__edit__undo(self):
+        """Undo the last change in the target editor."""
+        self._app.undo_entry(self._target())
+
+    @_activate_target
+    @_log_action
+    def _on__edit__redo(self):
+        """Redo the last undone change in the target editor."""
+        self._app.redo_entry(self._target())
+
+    @_activate_target
+    @_log_action
+    def _on__edit__cut(self):
+        """Cut the target editor's active visual selection to the system clipboard."""
+        self._app.cut_entry(self._target())
+
+    @_activate_target
+    @_log_action
+    def _on__edit__copy(self):
+        """Copy the target editor's active visual selection to the system clipboard."""
+        self._app.copy_entry(self._target())
+
+    @_activate_target
+    @_log_action
+    def _on__edit__paste(self):
+        """Paste the system clipboard after the cursor in the target editor."""
+        self._app.paste_entry(self._target())
 
     @_log_action
     def _on__help__open_project_page(self):
@@ -1284,6 +1342,81 @@ class MainApp(QMainWindow):
             end)
         """
         self.nvi.future_request("nvim_exec_lua", _code, [entry.win_id, filename])
+
+    def undo_entry(self, entry):
+        """Undo the last change in a tab's buffer."""
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request("nvim_call_function", "win_execute", [entry.win_id, "undo"])
+
+    def redo_entry(self, entry):
+        """Redo the last undone change in a tab's buffer."""
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request("nvim_call_function", "win_execute", [entry.win_id, "redo"])
+
+    async def get_undo_redo_state(self, entry):
+        """Return (can_undo, can_redo) for a tab's buffer, from Neovim's own undo tree.
+
+        seq_cur is this buffer's position in its undo tree; 0 is the original, pre-edit state
+        (nothing to undo), and seq_last is the highest sequence number reached so far (below it,
+        there is a later state to redo into).
+        """
+        if entry is None or entry.win_id is None:
+            return False, False
+        _code = """
+            local win = ...
+            return vim.api.nvim_win_call(win, function()
+                local info = vim.fn.undotree()
+                return {info.seq_cur, info.seq_last}
+            end)
+        """
+        seq_cur, seq_last = await self.nvi.call("nvim_exec_lua", _code, [entry.win_id])
+        return seq_cur > 0, seq_cur < seq_last
+
+    def cut_entry(self, entry):
+        """Cut the active visual selection in a tab's buffer to the system clipboard.
+
+        'gv' reselects the last visual area (preserving whether it was char/line/block-wise)
+        before deleting it, so this works whether or not Visual mode is still literally active;
+        '"+d' deletes into the '+' register, which Neovim keeps synced with the system clipboard.
+        """
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request(
+            "nvim_call_function", "win_execute", [entry.win_id, 'normal! gv"+d'])
+
+    def copy_entry(self, entry):
+        """Copy the active visual selection in a tab's buffer to the system clipboard.
+
+        See `cut_entry` for why 'gv' is used; '"+y' yanks (instead of deleting) into '+'.
+        """
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request(
+            "nvim_call_function", "win_execute", [entry.win_id, 'normal! gv"+y'])
+
+    def paste_entry(self, entry):
+        """Paste the system clipboard register after the cursor in a tab's buffer.
+
+        No selection is involved, so unlike Cut/Copy there is no 'gv' to reselect: '"+p' just
+        pastes whatever is in the '+' register, char/line/block-wise exactly as it was copied.
+        """
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request(
+            "nvim_call_function", "win_execute", [entry.win_id, 'normal! "+p'])
+
+    async def get_visual_selection_active(self, entry):
+        """Return whether Neovim is currently in a Visual mode (char, line or block).
+
+        Mode is global to Neovim, not per-window, so no win_call is needed here (unlike
+        `get_undo_redo_state`, which reads buffer-specific undo-tree data).
+        """
+        if entry is None or entry.win_id is None:
+            return False
+        mode_info = await self.nvi.call("nvim_get_mode")
+        return mode_info["mode"] in ("v", "V", "\x16")
 
     def mark_active_grid(self, grid_id):
         """Record which grid Neovim just made current (called from win_pos, before its tab exists).
