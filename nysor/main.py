@@ -280,6 +280,10 @@ class MainMenu:
         "&Edit": [
             ("&Undo", ACTION, "edit__undo", {SCOPE_MAIN, SCOPE_DETACHED}),
             ("Re&do", ACTION, "edit__redo", {SCOPE_MAIN, SCOPE_DETACHED}),
+            None,
+            ("Cu&t", ACTION, "edit__cut", {SCOPE_MAIN, SCOPE_DETACHED}),
+            ("&Copy", ACTION, "edit__copy", {SCOPE_MAIN, SCOPE_DETACHED}),
+            ("&Paste", ACTION, "edit__paste", {SCOPE_MAIN, SCOPE_DETACHED}),
         ],
         "&Help": [
             (
@@ -312,10 +316,10 @@ class MainMenu:
             menu = menu_bar.addMenu(title)
             self._fill(menu, entries)
             if title == "&Edit":
-                # Undo/Redo availability lives in Neovim's undo tree, not in any state we cache
-                # locally, so it's fetched fresh (a round trip) each time this menu is opened
-                # rather than kept current at all times
-                menu.aboutToShow.connect(lambda: call_async(self._refresh_undo_redo_state))
+                # Undo/Redo/Cut/Copy availability lives in Neovim's own state (undo tree,
+                # current mode), not in anything we cache locally, so it's fetched fresh (a
+                # round trip) each time this menu is opened rather than kept current at all times
+                menu.aboutToShow.connect(lambda: call_async(self._refresh_edit_menu_state))
         self.apply_enable_state()
 
     def build_popup(self):
@@ -398,11 +402,20 @@ class MainMenu:
             action.setToolTip(str(path.parent))
             action.triggered.connect(lambda checked=False, p=path: self._app.open_path(p))
 
-    async def _refresh_undo_redo_state(self):
-        """Ask Neovim whether the target editor can undo/redo, and enable those items to match."""
-        can_undo, can_redo = await self._app.get_undo_redo_state(self._target())
+    async def _refresh_edit_menu_state(self):
+        """Ask Neovim for the target's real undo/redo/selection state, enabling items to match.
+
+        Cut and Copy need an active Visual selection (char, line or block -- Neovim tracks which
+        kind on its own, we don't have to); Paste has no such precondition, so it is left alone.
+        """
+        entry = self._target()
+        can_undo, can_redo = await self._app.get_undo_redo_state(entry)
         self.menu_actions["&Undo"].setEnabled(can_undo)
         self.menu_actions["Re&do"].setEnabled(can_redo)
+
+        has_selection = await self._app.get_visual_selection_active(entry)
+        self.menu_actions["Cu&t"].setEnabled(has_selection)
+        self.menu_actions["&Copy"].setEnabled(has_selection)
 
     def apply_enable_state(self):
         """Enable/disable the state-dependent items for this menu's current target editor."""
@@ -506,6 +519,24 @@ class MainMenu:
     def _on__edit__redo(self):
         """Redo the last undone change in the target editor."""
         self._app.redo_entry(self._target())
+
+    @_log_action
+    @_activate_target
+    def _on__edit__cut(self):
+        """Cut the target editor's active visual selection to the system clipboard."""
+        self._app.cut_entry(self._target())
+
+    @_log_action
+    @_activate_target
+    def _on__edit__copy(self):
+        """Copy the target editor's active visual selection to the system clipboard."""
+        self._app.copy_entry(self._target())
+
+    @_log_action
+    @_activate_target
+    def _on__edit__paste(self):
+        """Paste the system clipboard after the cursor in the target editor."""
+        self._app.paste_entry(self._target())
 
     @_log_action
     def _on__help__open_project_page(self):
@@ -1342,6 +1373,50 @@ class MainApp(QMainWindow):
         """
         seq_cur, seq_last = await self.nvi.call("nvim_exec_lua", _code, [entry.win_id])
         return seq_cur > 0, seq_cur < seq_last
+
+    def cut_entry(self, entry):
+        """Cut the active visual selection in a tab's buffer to the system clipboard.
+
+        'gv' reselects the last visual area (preserving whether it was char/line/block-wise)
+        before deleting it, so this works whether or not Visual mode is still literally active;
+        '"+d' deletes into the '+' register, which Neovim keeps synced with the system clipboard.
+        """
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request(
+            "nvim_call_function", "win_execute", [entry.win_id, 'normal! gv"+d'])
+
+    def copy_entry(self, entry):
+        """Copy the active visual selection in a tab's buffer to the system clipboard.
+
+        See `cut_entry` for why 'gv' is used; '"+y' yanks (instead of deleting) into '+'.
+        """
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request(
+            "nvim_call_function", "win_execute", [entry.win_id, 'normal! gv"+y'])
+
+    def paste_entry(self, entry):
+        """Paste the system clipboard register after the cursor in a tab's buffer.
+
+        No selection is involved, so unlike Cut/Copy there is no 'gv' to reselect: '"+p' just
+        pastes whatever is in the '+' register, char/line/block-wise exactly as it was copied.
+        """
+        if entry is None or entry.win_id is None:
+            return
+        self.nvi.future_request(
+            "nvim_call_function", "win_execute", [entry.win_id, 'normal! "+p'])
+
+    async def get_visual_selection_active(self, entry):
+        """Return whether Neovim is currently in a Visual mode (char, line or block).
+
+        Mode is global to Neovim, not per-window, so no win_call is needed here (unlike
+        `get_undo_redo_state`, which reads buffer-specific undo-tree data).
+        """
+        if entry is None or entry.win_id is None:
+            return False
+        mode_info = await self.nvi.call("nvim_get_mode")
+        return mode_info["mode"] in ("v", "V", "\x16")
 
     def mark_active_grid(self, grid_id):
         """Record which grid Neovim just made current (called from win_pos, before its tab exists).
