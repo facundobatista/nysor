@@ -259,7 +259,7 @@ class MainMenu:
     # - if it's a sub-menu, the actuator is the function that fills it dynamically
     # note we don't have "static sub menus" yet
     MENU = {
-        "&File": [
+        "&File": ([
             ("&New", ACTION, "file__new", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
             ("&Open", ACTION, "file__open", {SCOPE_MAIN, SCOPE_OUTSIDE_TAB}),
             ("Recen&t", DYN_SUB_MENU, "_populate_open_recent", {SCOPE_MAIN}),
@@ -276,16 +276,16 @@ class MainMenu:
 
             ("&Close", ACTION, "file__close_tab", {SCOPE_MAIN, SCOPE_DETACHED, SCOPE_TAB}),
             ("E&xit", ACTION, "file__exit", {SCOPE_MAIN}),
-        ],
-        "&Edit": [
+        ], None),
+        "&Edit": ([
             ("&Undo", ACTION, "edit__undo", {SCOPE_MAIN, SCOPE_DETACHED}),
             ("Re&do", ACTION, "edit__redo", {SCOPE_MAIN, SCOPE_DETACHED}),
             None,
             ("Cu&t", ACTION, "edit__cut", {SCOPE_MAIN, SCOPE_DETACHED}),
             ("&Copy", ACTION, "edit__copy", {SCOPE_MAIN, SCOPE_DETACHED}),
             ("&Paste", ACTION, "edit__paste", {SCOPE_MAIN, SCOPE_DETACHED}),
-        ],
-        "&Help": [
+        ], "_refresh_edit_menu_state"),
+        "&Help": ([
             (
                 "Open &project page",
                 ACTION,
@@ -295,7 +295,7 @@ class MainMenu:
             ("Create a new &issue", ACTION, "help__create_issue", {SCOPE_MAIN, SCOPE_DETACHED}),
             None,
             ("&About Nysor", ACTION, "help__about", {SCOPE_MAIN, SCOPE_DETACHED}),
-        ],
+        ], None),
     }
 
     def __init__(self, app, host, scope, target):
@@ -308,25 +308,24 @@ class MainMenu:
     def attach_bar(self):
         """Build a persistent menu bar on this menu's host window (SCOPE_MAIN / SCOPE_DETACHED)."""
         menu_bar = self._host.menuBar()
-        for title, options in self.MENU.items():
+        for title, (options, refresh_func_name) in self.MENU.items():
             entries = [entry for entry in options if self._in_scope(entry)]
             if not entries:
                 # every real entry was filtered out -> do not add an empty menu
                 continue
             menu = menu_bar.addMenu(title)
             self._fill(menu, entries)
-            if title == "&Edit":
-                # Undo/Redo/Cut/Copy availability lives in Neovim's own state (undo tree,
-                # current mode), not in anything we cache locally, so it's fetched fresh (a
-                # round trip) each time this menu is opened rather than kept current at all times
-                menu.aboutToShow.connect(lambda: call_async(self._refresh_edit_menu_state))
+            if refresh_func_name is not None:
+                func = getattr(self, refresh_func_name)
+                menu.aboutToShow.connect(lambda: call_async(func))
         self.apply_enable_state()
 
     def build_popup(self):
         """Build a transient context menu (SCOPE_TAB) on the host window; the caller exec()s it."""
         menu = QMenu(self._host)
         # only the File entries carry SCOPE_TAB
-        entries = [entry for entry in self.MENU["&File"] if self._in_scope(entry)]
+        options, _ = self.MENU["&File"]
+        entries = [entry for entry in options if self._in_scope(entry)]
         self._fill(menu, entries)
         self.apply_enable_state()
         return menu
@@ -403,10 +402,11 @@ class MainMenu:
             action.triggered.connect(lambda checked=False, p=path: self._app.open_path(p))
 
     async def _refresh_edit_menu_state(self):
-        """Ask Neovim for the target's real undo/redo/selection state, enabling items to match.
+        """Ask Neovim for some targets' state, enabling items to match.
 
-        Cut and Copy need an active Visual selection (char, line or block -- Neovim tracks which
-        kind on its own, we don't have to); Paste has no such precondition, so it is left alone.
+        This is because Undo/Redo/Cut/Copy availability lives in Neovim's own state (undo tree,
+        current mode, selections), not in anything we cache locally, so it's fetched fresh each
+        time this menu is opened rather than kept current at all times
         """
         entry = self._target()
         can_undo, can_redo = await self._app.get_undo_redo_state(entry)

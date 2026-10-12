@@ -358,7 +358,8 @@ class TestMenuMnemonics:
 
     @pytest.mark.parametrize("title", ["&File", "&Edit", "&Help"])
     def test_submenu_entries_have_unique_mnemonics(self, title):
-        labels = [entry[0] for entry in MainMenu.MENU[title] if entry is not None]
+        options, _ = MainMenu.MENU[title]
+        labels = [entry[0] for entry in options if entry is not None]
         duplicates = _duplicate_mnemonics(labels)
         assert not duplicates, f"Repeated mnemonic(s) in {title!r} menu: {duplicates}"
 
