@@ -739,14 +739,64 @@ class DetachedWindow(QMainWindow):
         self._app.close_pane(self._pane)
 
 
+class BusySpinner(QLabel):
+    """A tiny braille-character spinner, shown while Neovim is busy with something slow.
+
+    Lives in the top-right corner of the tab strip (otherwise unused space). Appearance is
+    delayed a bit so short pauses (the common case) never flash a spinner at all.
+    """
+
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    FRAME_MS = 80
+    SHOW_DELAY_MS = 120
+
+    def __init__(self):
+        super().__init__()
+        self._frame = 0
+        self._rotator = QTimer(self)
+        self._rotator.setInterval(self.FRAME_MS)
+        self._rotator.timeout.connect(self._advance)
+        self._appearer = QTimer(self)
+        self._appearer.setSingleShot(True)
+        self._appearer.setInterval(self.SHOW_DELAY_MS)
+        self._appearer.timeout.connect(self._start_spinning)
+        self.hide()
+
+    def set_busy(self, busy):
+        """Start or stop indicating a busy period; repeated calls are harmless."""
+        if busy:
+            if not self.isVisible() and not self._appearer.isActive():
+                self._appearer.start()
+        else:
+            self._appearer.stop()
+            self._rotator.stop()
+            self.hide()
+
+    def _start_spinning(self):
+        """Show the spinner and start rotating (the appearance delay just elapsed)."""
+        self._frame = 0
+        self.setText(self.FRAMES[0])
+        self.show()
+        self._rotator.start()
+
+    def _advance(self):
+        """Rotate to the next frame."""
+        self._frame = (self._frame + 1) % len(self.FRAMES)
+        self.setText(self.FRAMES[self._frame])
+
+
 class MainApp(QMainWindow):
     """The main application window."""
 
-    def __init__(self, version, loop, paths_to_open, nvim_exec_path):
+    def __init__(self, version, loop, paths_to_open, nvim_exec_path, close_event):
         super().__init__()
         self.setWindowIcon(QIcon(ICON_PATH))
         self.nysor_version = version
         self.loop = loop
+
+        # set by close_gui at the very end of the quit sequence; the main() coroutine parks on it
+        # (NOT on Qt's aboutToQuit, which fires only after the Qt loop stopped processing events
+        self._close_event = close_event
 
         self._closing = 0
         # a pane kept aside while its buffer is reopened, to re-attach to the new window
@@ -793,6 +843,9 @@ class MainApp(QMainWindow):
         self.tabs.setElideMode(Qt.TextElideMode.ElideNone)
         self.tabs.setUsesScrollButtons(True)
         self.tabs.tabBar().setExpanding(False)
+        # busy indicator in the strip's right corner (fed by the busy_start/stop notifications)
+        self._busy_spinner = BusySpinner()
+        self.tabs.setCornerWidget(self._busy_spinner, Qt.Corner.TopRightCorner)
         self.main_layout.addWidget(self.tabs, stretch=1)
 
         self._unclaimed_pane = EditorPane(self)
@@ -968,6 +1021,10 @@ class MainApp(QMainWindow):
             display.set_base_font(name, size)
         self.message_display.set_base_font(name, size)
         self.statusline_display.set_base_font(name, size)
+
+    def set_busy(self, busy):
+        """Show or hide the busy indicator (Neovim started/stopped something slow)."""
+        self._busy_spinner.set_busy(busy)
 
     def show_font_size(self, display, size):
         """Flash the new font size in the status bar of the window that actually hosts `display`.
@@ -1814,6 +1871,7 @@ class MainApp(QMainWindow):
         # we're really done here, let the event propagate if we have it, or close manually
         assert self._closing == 2
         logger.debug("Bye")
+        self._close_event.set()
         if event is None:
             self.close()
         else:
@@ -1952,7 +2010,8 @@ async def main(event_loop, args, app_close_event):
         paths_to_open = requested_paths
 
     # start and show GUI
-    main_window = MainApp(nysor_version, event_loop, paths_to_open, nvim_exec_path)
+    main_window = MainApp(
+        nysor_version, event_loop, paths_to_open, nvim_exec_path, app_close_event)
     main_window.show()
     await app_close_event.wait()
 
@@ -2002,12 +2061,16 @@ def start():
 
     app = qasync.QApplication(sys.argv)
 
+    # the quit sequence is driven by MainApp.close_gui, which wakes the main() coroutine itself;
+    # closing the last window must NOT stop the Qt loop on its own (that leaves the parked
+    # coroutine no live loop to resume on -- see MainApp._close_event)
+    app.setQuitOnLastWindowClosed(False)
+
     # connect with async's event loop
     event_loop = qasync.QEventLoop(app)
     event_loop.set_debug(True)
     asyncio.set_event_loop(event_loop)
     app_close_event = asyncio.Event()
-    app.aboutToQuit.connect(app_close_event.set)
 
     # go!
     with event_loop:

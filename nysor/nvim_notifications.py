@@ -565,6 +565,14 @@ class NvimNotifications:
             self.structs.setdefault("mode-info", {}).update(info)
             self.dyncache.clean("mode-info")
 
+    def _n_redraw__busy_start(self, *args):
+        """Neovim started something potentially slow (e.g. a big paste); show the indicator."""
+        self.main_window.set_busy(True)
+
+    def _n_redraw__busy_stop(self, *args):
+        """Neovim finished the busy operation; hide the indicator."""
+        self.main_window.set_busy(False)
+
     def _n_redraw__mouse_on(self, *args):
         """Properly ignored."""
 
