@@ -16,9 +16,10 @@ import os
 import re
 
 import pytest
-from PyQt6.QtWidgets import QMenu
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QMenu
 
-from nysor.main import BusySpinner, MainApp, MainMenu
+from nysor.main import BusyIndicator, MainApp, MainMenu
 
 
 class TestOpenFileDialog:
@@ -136,54 +137,75 @@ class TestCloseGui:
         event.accept.assert_called_once()
 
 
-class TestBusySpinner:
-    """The spinner waits before appearing, so short busy periods never flash anything."""
+@pytest.fixture
+def indicator(qapp):
+    """A real BusyIndicator; always cleaned up after the test (cursor restored, hidden)."""
+    ind = BusyIndicator()
+    yield ind
+    ind.set_busy(False)
 
-    def test_starts_hidden(self, qapp):
+
+class TestBusyIndicator:
+    """The indicator (spinner + busy cursor) waits before kicking in, so short busy periods
+    never flash anything."""
+
+    def test_starts_hidden(self, indicator):
         """No busy period was reported; nothing is shown."""
-        spinner = BusySpinner()
-        assert spinner.isHidden()
+        assert indicator.isHidden()
 
-    def test_busy_does_not_show_immediately(self, qapp):
+    def test_busy_does_not_show_immediately(self, indicator):
         """Right after busy_start the spinner is still hidden (grace delay running)."""
-        spinner = BusySpinner()
-        spinner.set_busy(True)
-        assert spinner.isHidden()
-        assert spinner._appearer.isActive()
+        indicator.set_busy(True)
+        assert indicator.isHidden()
+        assert indicator._appearer.isActive()
 
-    def test_shows_and_rotates_after_the_delay(self, qapp):
+    def test_shows_and_rotates_after_the_delay(self, indicator):
         """Once the grace delay elapses the spinner shows and starts rotating."""
-        spinner = BusySpinner()
-        spinner.set_busy(True)
-        spinner._start_spinning()  # the appearer's slot, fired directly (no real wait)
-        assert not spinner.isHidden()
-        assert spinner._rotator.isActive()
-        first_frame = spinner.text()
-        spinner._advance()
-        assert spinner.text() != first_frame
+        indicator.set_busy(True)
+        indicator._start_indicating()  # the appearer's slot, fired directly (no real wait)
+        assert not indicator.isHidden()
+        assert indicator._rotator.isActive()
+        first_frame = indicator.text()
+        indicator._advance()
+        assert indicator.text() != first_frame
 
-    def test_short_pause_cancels_the_appearance(self, qapp):
-        """A busy_stop before the grace delay elapses leaves the spinner hidden."""
-        spinner = BusySpinner()
-        spinner.set_busy(True)
-        spinner.set_busy(False)
-        assert spinner.isHidden()
-        assert not spinner._appearer.isActive()
+    def test_sets_the_busy_cursor_after_the_delay(self, qapp, indicator):
+        """When the indicator really starts, the mouse cursor goes busy app-wide."""
+        indicator.set_busy(True)
+        assert qapp.overrideCursor() is None  # grace delay: not yet
+        indicator._start_indicating()
+        assert qapp.overrideCursor().shape() == Qt.CursorShape.BusyCursor
 
-    def test_busy_stop_hides_and_stops_everything(self, qapp):
-        """Stopping while already spinning hides the spinner and stops the rotation."""
-        spinner = BusySpinner()
-        spinner.set_busy(True)
-        spinner._start_spinning()
-        spinner.set_busy(False)
-        assert spinner.isHidden()
-        assert not spinner._rotator.isActive()
+    def test_short_pause_cancels_the_appearance(self, indicator, qapp):
+        """A busy_stop before the grace delay elapses leaves everything untouched."""
+        indicator.set_busy(True)
+        indicator.set_busy(False)
+        assert indicator.isHidden()
+        assert not indicator._appearer.isActive()
+        assert qapp.overrideCursor() is None
 
-    def test_main_app_delegates_to_the_spinner(self, mocker):
-        """MainApp.set_busy just forwards to the spinner widget."""
+    def test_busy_stop_hides_and_restores_everything(self, qapp, indicator):
+        """Stopping while indicating hides the spinner, stops the rotation, restores the cursor."""
+        indicator.set_busy(True)
+        indicator._start_indicating()
+        indicator.set_busy(False)
+        assert indicator.isHidden()
+        assert not indicator._rotator.isActive()
+        assert qapp.overrideCursor() is None
+
+    def test_repeated_busy_start_does_not_stack_cursor_overrides(self, qapp, indicator, mocker):
+        """Several busy_start in a row set the cursor override only once."""
+        indicator.set_busy(True)
+        spy = mocker.spy(QApplication, "setOverrideCursor")
+        indicator._start_indicating()
+        indicator.set_busy(True)  # already indicating: must be a no-op
+        assert spy.call_count == 1
+
+    def test_main_app_delegates_to_the_indicator(self, mocker):
+        """MainApp.set_busy just forwards to the indicator widget."""
         fake_self = mocker.MagicMock()
         MainApp.set_busy(fake_self, True)
-        fake_self._busy_spinner.set_busy.assert_called_once_with(True)
+        fake_self._busy_indicator.set_busy.assert_called_once_with(True)
 
 
 @pytest.fixture

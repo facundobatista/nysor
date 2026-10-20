@@ -20,6 +20,7 @@ from urllib.parse import urlencode
 
 import qasync
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -38,7 +39,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from PyQt6.QtCore import Qt, QEvent, QSize, QTimer
-from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtGui import QIcon, QAction, QCursor
 
 
 from nysor import recent_files, swarm, nvim_versions
@@ -739,11 +740,13 @@ class DetachedWindow(QMainWindow):
         self._app.close_pane(self._pane)
 
 
-class BusySpinner(QLabel):
-    """A tiny braille-character spinner, shown while Neovim is busy with something slow.
+class BusyIndicator(QLabel):
+    """The busy indicator: a braille spinner plus a busy mouse cursor.
 
-    Lives in the top-right corner of the tab strip (otherwise unused space). Appearance is
-    delayed a bit so short pauses (the common case) never flash a spinner at all.
+    The spinner lives in the top-right corner of the tab strip (otherwise unused space); the
+    cursor is an application-wide override. Both kick in together, after a small grace delay,
+    so short busy periods (the common case, e.g. every paste querying the clipboard provider)
+    never flash the indicator at all.
     """
 
     FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -753,31 +756,37 @@ class BusySpinner(QLabel):
     def __init__(self):
         super().__init__()
         self._frame = 0
+        self._indicating = False
         self._rotator = QTimer(self)
         self._rotator.setInterval(self.FRAME_MS)
         self._rotator.timeout.connect(self._advance)
         self._appearer = QTimer(self)
         self._appearer.setSingleShot(True)
         self._appearer.setInterval(self.SHOW_DELAY_MS)
-        self._appearer.timeout.connect(self._start_spinning)
+        self._appearer.timeout.connect(self._start_indicating)
         self.hide()
 
     def set_busy(self, busy):
         """Start or stop indicating a busy period; repeated calls are harmless."""
         if busy:
-            if not self.isVisible() and not self._appearer.isActive():
+            if not self._indicating and not self._appearer.isActive():
                 self._appearer.start()
         else:
             self._appearer.stop()
+            if self._indicating:
+                self._indicating = False
+                QApplication.restoreOverrideCursor()
             self._rotator.stop()
             self.hide()
 
-    def _start_spinning(self):
-        """Show the spinner and start rotating (the appearance delay just elapsed)."""
+    def _start_indicating(self):
+        """Start indicating: show the spinner, rotate it, and set the busy cursor."""
+        self._indicating = True
         self._frame = 0
         self.setText(self.FRAMES[0])
         self.show()
         self._rotator.start()
+        QApplication.setOverrideCursor(QCursor(Qt.CursorShape.BusyCursor))
 
     def _advance(self):
         """Rotate to the next frame."""
@@ -843,9 +852,9 @@ class MainApp(QMainWindow):
         self.tabs.setElideMode(Qt.TextElideMode.ElideNone)
         self.tabs.setUsesScrollButtons(True)
         self.tabs.tabBar().setExpanding(False)
-        # busy indicator in the strip's right corner (fed by the busy_start/stop notifications)
-        self._busy_spinner = BusySpinner()
-        self.tabs.setCornerWidget(self._busy_spinner, Qt.Corner.TopRightCorner)
+        # busy indicator, fed by the busy_start/busy_stop notifications
+        self._busy_indicator = BusyIndicator()
+        self.tabs.setCornerWidget(self._busy_indicator, Qt.Corner.TopRightCorner)
         self.main_layout.addWidget(self.tabs, stretch=1)
 
         self._unclaimed_pane = EditorPane(self)
@@ -1024,7 +1033,7 @@ class MainApp(QMainWindow):
 
     def set_busy(self, busy):
         """Show or hide the busy indicator (Neovim started/stopped something slow)."""
-        self._busy_spinner.set_busy(busy)
+        self._busy_indicator.set_busy(busy)
 
     def show_font_size(self, display, size):
         """Flash the new font size in the status bar of the window that actually hosts `display`.
