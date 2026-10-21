@@ -11,13 +11,15 @@ __init__ is light (it just stores its collaborators), so it is built for real, t
 tests/test_nvim_notifications.py builds a real NvimNotifications with a mocked host.
 """
 
+import asyncio
 import os
 import re
 
 import pytest
-from PyQt6.QtWidgets import QMenu
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QMenu
 
-from nysor.main import MainApp, MainMenu
+from nysor.main import BusyIndicator, MainApp, MainMenu
 
 
 class TestOpenFileDialog:
@@ -241,6 +243,119 @@ class TestGetVisualSelectionActive:
         fake_self.nvi.call = mocker.AsyncMock(return_value={"mode": "\x16", "blocking": False})
         entry = mocker.MagicMock(win_id=42)
         assert await MainApp.get_visual_selection_active(fake_self, entry) is True
+
+
+class TestCloseGui:
+    """The close sequence hands the exit over to the main() coroutine only at the very end."""
+
+    async def test_initial_close_kicks_off_the_quit_sequence(self, mocker):
+        """The first close only starts the async quit sequence; the window stays up."""
+        fake_self = mocker.MagicMock()
+        fake_self._closing = 0
+        fake_self._quit = mocker.AsyncMock()
+        fake_self._close_event = asyncio.Event()
+        event = mocker.MagicMock()
+
+        MainApp.close_gui(fake_self, event)
+
+        assert fake_self._closing == 1
+        event.ignore.assert_called_once()
+        assert not fake_self._close_event.is_set()
+
+    def test_mid_close_request_changes_nothing(self, mocker):
+        """A close request arriving while the quit sequence runs is just ignored."""
+        fake_self = mocker.MagicMock()
+        fake_self._closing = 1
+        fake_self._close_event = asyncio.Event()
+        event = mocker.MagicMock()
+
+        MainApp.close_gui(fake_self, event)
+
+        event.ignore.assert_called_once()
+        assert not fake_self._close_event.is_set()
+
+    def test_final_close_signals_main_coroutine_and_accepts(self, mocker):
+        """The final close sets the app-close event (waking main() on a live loop) and accepts."""
+        fake_self = mocker.MagicMock()
+        fake_self._closing = 2
+        fake_self._close_event = asyncio.Event()
+        event = mocker.MagicMock()
+
+        MainApp.close_gui(fake_self, event)
+
+        assert fake_self._close_event.is_set()
+        event.accept.assert_called_once()
+
+
+@pytest.fixture
+def indicator(qapp):
+    """A real BusyIndicator; always cleaned up after the test (cursor restored, hidden)."""
+    ind = BusyIndicator()
+    yield ind
+    ind.set_busy(False)
+
+
+class TestBusyIndicator:
+    """The indicator (spinner + busy cursor) waits before kicking in, so short busy periods
+    never flash anything."""
+
+    def test_starts_hidden(self, indicator):
+        """No busy period was reported; nothing is shown."""
+        assert indicator.isHidden()
+
+    def test_busy_does_not_show_immediately(self, indicator):
+        """Right after busy_start the spinner is still hidden (grace delay running)."""
+        indicator.set_busy(True)
+        assert indicator.isHidden()
+        assert indicator._appearer.isActive()
+
+    def test_shows_and_rotates_after_the_delay(self, indicator):
+        """Once the grace delay elapses the spinner shows and starts rotating."""
+        indicator.set_busy(True)
+        indicator._start_indicating()  # the appearer's slot, fired directly (no real wait)
+        assert not indicator.isHidden()
+        assert indicator._rotator.isActive()
+        first_frame = indicator.text()
+        indicator._advance()
+        assert indicator.text() != first_frame
+
+    def test_sets_the_busy_cursor_after_the_delay(self, qapp, indicator):
+        """When the indicator really starts, the mouse cursor goes busy app-wide."""
+        indicator.set_busy(True)
+        assert qapp.overrideCursor() is None  # grace delay: not yet
+        indicator._start_indicating()
+        assert qapp.overrideCursor().shape() == Qt.CursorShape.BusyCursor
+
+    def test_short_pause_cancels_the_appearance(self, indicator, qapp):
+        """A busy_stop before the grace delay elapses leaves everything untouched."""
+        indicator.set_busy(True)
+        indicator.set_busy(False)
+        assert indicator.isHidden()
+        assert not indicator._appearer.isActive()
+        assert qapp.overrideCursor() is None
+
+    def test_busy_stop_hides_and_restores_everything(self, qapp, indicator):
+        """Stopping while indicating hides the spinner, stops the rotation, restores the cursor."""
+        indicator.set_busy(True)
+        indicator._start_indicating()
+        indicator.set_busy(False)
+        assert indicator.isHidden()
+        assert not indicator._rotator.isActive()
+        assert qapp.overrideCursor() is None
+
+    def test_repeated_busy_start_does_not_stack_cursor_overrides(self, qapp, indicator, mocker):
+        """Several busy_start in a row set the cursor override only once."""
+        indicator.set_busy(True)
+        spy = mocker.spy(QApplication, "setOverrideCursor")
+        indicator._start_indicating()
+        indicator.set_busy(True)  # already indicating: must be a no-op
+        assert spy.call_count == 1
+
+    def test_main_app_delegates_to_the_indicator(self, mocker):
+        """MainApp.set_busy just forwards to the indicator widget."""
+        fake_self = mocker.MagicMock()
+        MainApp.set_busy(fake_self, True)
+        fake_self._busy_indicator.set_busy.assert_called_once_with(True)
 
 
 @pytest.fixture

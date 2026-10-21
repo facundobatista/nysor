@@ -4,7 +4,7 @@
 
 """Tests for nysor/nvim_notifications.py."""
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 import pytest
 
@@ -122,6 +122,11 @@ class TestNvimNotificationsRedraw:
         """All submethods in one _h__redraw() call are dispatched in order."""
         notif._h__redraw(["flush", None], ["flush", None])
         assert notif._editor.flush.call_count == 2
+
+    def test_busy_start_and_stop_drive_the_indicator(self, notif):
+        """busy_start/busy_stop are implemented: they toggle the busy indicator."""
+        notif._h__redraw(["busy_start", []], ["busy_stop", []])
+        notif.main_window.set_busy.assert_has_calls([call(True), call(False)])
 
 
 class TestNvimNotificationsHandlers:
