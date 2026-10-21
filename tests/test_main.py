@@ -245,7 +245,6 @@ class TestGetVisualSelectionActive:
         assert await MainApp.get_visual_selection_active(fake_self, entry) is True
 
 
-
 class TestCloseGui:
     """The close sequence hands the exit over to the main() coroutine only at the very end."""
 
