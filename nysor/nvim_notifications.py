@@ -348,9 +348,7 @@ class NvimNotifications:
                 )
             else:
                 try:
-                    # FIXME.94 allow logging system to use `logger.trace`
-                    logger.log(
-                        logging.TRACE,
+                    logger.trace(
                         "[NvimNotifications] Handle 'redraw': {} - {}", submethod, args
                     )
                     n_meth(*args)

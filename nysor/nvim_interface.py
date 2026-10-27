@@ -39,7 +39,7 @@ class NeovimExecutableNotFound(NeovimError):
 
 def trace(msg, *params):
     """Log in trace level with a prefix."""
-    logger.log(logging.TRACE, "[nvim] " + msg, *params)
+    logger.trace("[nvim] " + msg, *params)
 
 
 def ext_hook(code, data):

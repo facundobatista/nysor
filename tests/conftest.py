@@ -6,13 +6,16 @@
 
 import os
 
+import logassert
+
 # must be set before any PyQt import ever creates a QApplication (see the 'qapp' fixture below)
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
+import pytest  # NOQA
 
-from nysor import logtools
+from nysor import logtools  # NOQA
 
+logassert.install_custom_level("trace", logtools._TRACE_LEVEL)
 logtools.logsetup(None)
 
 

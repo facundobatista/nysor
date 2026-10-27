@@ -118,7 +118,6 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 These are the items lousely grouped to get there:
 
 **For 0.9:**
-- Check missing low-bar replacement
 - FIXME.94 allow logging system to use `logger.trace`
 - allow double-level logging (user selected to terminal, debug to a file if configured)
 - docs/2026-08-24-optimizations.md
@@ -138,6 +137,9 @@ The path after that is less descriptive. The following are the big items I want 
     - simple, showing the directory where the process is run
     - if double click in a file, it should open a new window/tab with the new buffer
 - split command bar / messages
+    - the low-bar shows some info like "mode", the edited file (already duplicated in the tab above), etc
+        - can we show this information better somewhere else?
+        - what info do we have exactly?
     - try to separate, if possible, the command bar from Neovim's grid itself
         - add better history and ways to search/filter previous commands
     - try to separate, if possible, the windows for messages from the editor

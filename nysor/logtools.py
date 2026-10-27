@@ -14,17 +14,27 @@ logger = logging.getLogger(__name__)
 _TRACE_LEVEL = 5
 LOG_LEVELS = {
     "quiet": (logging.WARNING, "Set logging to be quiet."),
-    "verbose": (logging.DEBUG, "Set logging to verbose."),
+    "verbose": (logging.DEBUG, "Set logging for verbose."),
     "trace": (_TRACE_LEVEL, "Set logging for tracing (beware, there may be too many messages)."),
     None: (logging.INFO, None),  # default no-option-set
 }
+
+
+def _trace(self, message, *args, **kwargs):
+    """Log the message with severity TRACE."""
+    if self.isEnabledFor(_TRACE_LEVEL):
+        self._log(_TRACE_LEVEL, message, args, **kwargs)
+
+
+# make `logger.trace(...)` available everywhere; patching the class also affects loggers
+# created before this module gets imported
+logging.Logger.trace = _trace
 
 
 def logsetup(selected_level):
     """Prepare all logging."""
     # add trace level to logging
     logging.addLevelName(_TRACE_LEVEL, "TRACE")
-    logging.TRACE = _TRACE_LEVEL
 
     # config
     logging.basicConfig(
