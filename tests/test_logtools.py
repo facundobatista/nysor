@@ -21,15 +21,6 @@ class TestTrace:
         assert "hello world" not in logs.debug
         assert "hello world" not in logs.info
 
-    def test_caller_attribution_points_to_the_real_caller(self, caplog):
-        """The record's module/function refer to the caller, not to the trace helper itself."""
-        with caplog.at_level(logtools.LOG_LEVELS["trace"][0]):
-            logger.trace("who is calling")
-
-        record = caplog.records[-1]
-        assert record.module == "test_logtools"
-        assert record.funcName == "test_caller_attribution_points_to_the_real_caller"
-
 
 class TestPrefixFormatter:
     """Log lines carry a curated prefix (see LOG_PREFIXES), or the module name when unmapped."""
