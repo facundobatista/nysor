@@ -37,11 +37,6 @@ class NeovimExecutableNotFound(NeovimError):
     """The executable to run neovim was not found."""
 
 
-def trace(msg, *params):
-    """Log in trace level with a prefix."""
-    logger.trace("[nvim] " + msg, *params)
-
-
 def ext_hook(code, data):
     """Process other external types in msg-unpacking."""
     # code is the type of object
@@ -233,7 +228,10 @@ class NvimInterface:
 
         # type (0 == request), msgid, method, params
         payload = msgpack.packb([0, self._cb_counter, method.encode("ascii"), params])
-        trace("Sending request id={:d} method={!r} params={}", self._cb_counter, method, params)
+        logger.trace(
+            "Sending request id={:d} method={!r} params={}",
+            self._cb_counter, method, params,
+        )
         try:
             await self._loop.sock_sendall(self._client, payload)
         except BrokenPipeError:
@@ -267,13 +265,16 @@ class NvimInterface:
 
         # really read
         return_code = self._proc.poll()
-        trace("Reading response; rc {}", return_code)
+        logger.trace("Reading response; rc {}", return_code)
 
         for msgtype, *rest in self._read_messages():
             if msgtype == 1:
                 # response
                 msgid, error, result = rest
-                trace("Receiving response msgid={:d} error={!r} result={!r}", msgid, error, result)
+                logger.trace(
+                    "Receiving response msgid={:d} error={!r} result={!r}",
+                    msgid, error, result,
+                )
                 callback, errback = self._callbacks.pop(msgid)
 
                 if error is not None:
@@ -286,7 +287,7 @@ class NvimInterface:
             elif msgtype == 2:
                 # notification
                 method, params = rest
-                trace("Receiving notification method={!r} params={!r}", method, params)
+                logger.trace("Receiving notification method={!r} params={!r}", method, params)
                 self._notif_handler(method, params)
 
             else:

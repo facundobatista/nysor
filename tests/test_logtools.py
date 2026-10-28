@@ -6,6 +6,8 @@
 
 import logging
 
+from nysor import logtools
+
 logger = logging.getLogger()
 
 
@@ -18,3 +20,33 @@ class TestTrace:
         assert "hello world" in logs.trace
         assert "hello world" not in logs.debug
         assert "hello world" not in logs.info
+
+    def test_caller_attribution_points_to_the_real_caller(self, caplog):
+        """The record's module/function refer to the caller, not to the trace helper itself."""
+        with caplog.at_level(logtools.LOG_LEVELS["trace"][0]):
+            logger.trace("who is calling")
+
+        record = caplog.records[-1]
+        assert record.module == "test_logtools"
+        assert record.funcName == "test_caller_attribution_points_to_the_real_caller"
+
+
+class TestPrefixFormatter:
+    """Log lines carry a curated prefix (see LOG_PREFIXES), or the module name when unmapped."""
+
+    def _format(self, name, pathname):
+        """Format a minimal record, the same way logsetup configures the root handler."""
+        record = logging.LogRecord(name, logging.INFO, pathname, 1, "hello", None, None)
+        formatter = logtools._PrefixFormatter(logtools._LOG_FORMAT, datefmt=logtools._LOG_DATEFMT)
+        return formatter.format(record)
+
+    def test_mapped_logger_gets_curated_prefix(self):
+        """A logger in LOG_PREFIXES logs with its curated prefix, not its module name."""
+        out = self._format("nysor.nvim_interface", "/somewhere/nvim_interface.py")
+        assert "[nvim]" in out
+        assert "nvim_interface" not in out
+
+    def test_unmapped_logger_falls_back_to_module_name(self):
+        """A logger not in LOG_PREFIXES logs with its module name."""
+        out = self._format("nysor.text_display", "/somewhere/text_display.py")
+        assert "[text_display]" in out

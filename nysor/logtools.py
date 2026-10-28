@@ -19,6 +19,14 @@ LOG_LEVELS = {
     None: (logging.INFO, None),  # default no-option-set
 }
 
+# short curated log prefixes, by logger name; unmapped loggers fall back to their module name
+LOG_PREFIXES = {
+    "nysor.nvim_interface": "nvim",
+    "nysor.nvim_notifications": "notif",
+}
+_LOG_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-5s %(prefix)-7s %(message)s"
+_LOG_DATEFMT = "%H:%M:%S"
+
 
 def _trace(self, message, *args, **kwargs):
     """Log the message with severity TRACE."""
@@ -31,15 +39,24 @@ def _trace(self, message, *args, **kwargs):
 logging.Logger.trace = _trace
 
 
+class _PrefixFormatter(logging.Formatter):
+    """A formatter that shows a curated prefix (see LOG_PREFIXES), falling back to the module."""
+
+    def formatMessage(self, record):
+        record.prefix = f"[{LOG_PREFIXES.get(record.name, record.module)}]"
+        return super().formatMessage(record)
+
+
 def logsetup(selected_level):
     """Prepare all logging."""
     # add trace level to logging
     logging.addLevelName(_TRACE_LEVEL, "TRACE")
 
     # config
-    logging.basicConfig(
-        format='%(asctime)s.%(msecs)03d %(levelname)-5s %(message)s',
-        datefmt='%H:%M:%S', stream=sys.stdout)
+    logging.basicConfig(stream=sys.stdout)
+    formatter = _PrefixFormatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
+    for handler in logging.getLogger().handlers:
+        handler.setFormatter(formatter)
 
     # set proper level to the whole app
     level, _ = LOG_LEVELS[selected_level]

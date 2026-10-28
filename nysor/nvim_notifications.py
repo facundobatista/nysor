@@ -343,14 +343,12 @@ class NvimNotifications:
             n_meth = getattr(self, n_name, None)
             if n_meth is None:
                 logger.error(
-                    "[NvimNotifications] Submethod {!r} not implemented in 'redraw', params: {}",
+                    "Submethod {!r} not implemented in 'redraw', params: {}",
                     submethod, args
                 )
             else:
                 try:
-                    logger.trace(
-                        "[NvimNotifications] Handle 'redraw': {} - {}", submethod, args
-                    )
+                    logger.trace("Handle 'redraw': {} - {}", submethod, args)
                     n_meth(*args)
                 except Exception:
                     logger.exception("Crash when calling {!r} with {!r}", n_name, args)
@@ -386,8 +384,7 @@ class NvimNotifications:
         h_name = "_h__" + method
         h_meth = getattr(self, h_name, None)
         if h_meth is None:
-            logger.error(
-                "[NvimNotifications] Method {!r} not implemented, params: {}", method, parameters)
+            logger.error("Method {!r} not implemented, params: {}", method, parameters)
             return
 
         h_meth(*parameters)
@@ -579,7 +576,7 @@ class NvimNotifications:
 
     def _n_redraw__option_set(self, *options):
         options = dict(options)
-        logger.debug("[NvimNotifications] options set: {}", options)
+        logger.debug("options set: {}", options)
         self.options.update(options)
 
         # react to some of those options; the editor layer owns and applies the font
@@ -593,7 +590,7 @@ class NvimNotifications:
         """Set the icon, if any (one redraw may carry several)."""
         for (icon,) in args:
             if icon:
-                logger.warning("[NvimNotifications] need to implement set icon with {!r}", icon)
+                logger.warning("need to implement set icon with {!r}", icon)
 
     def _n_redraw__set_title(self, *args):
         """Ignore Neovim's global title (the editor layer titles each GUI window itself).
