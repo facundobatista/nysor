@@ -467,6 +467,7 @@ class MainMenu:
     @_log_action
     def _on__file__open(self):
         """Open a file (deduplicated across instances; see MainApp.open_file_dialog)."""
+        logger.trace("frutaaaaaaaaaaaaaaaaaaaa")
         self._app.open_file_dialog()
 
     @_activate_target

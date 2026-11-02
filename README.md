@@ -73,9 +73,13 @@ grep process.txt | nysor -
 
 ### Controlling logs
 
-By default some INFO is sent to the terminal.
+Nysor always logs to a file (`nysor-<timestamp>-<pid>.log` in its log directory), recording
+everything from INFO up. The terminal only shows warnings and errors.
 
-You can reduce the logs verbosity with `-q/--quiet`, increase it with `-v/--verbose`, or even use `-t/--trace` to see everything that is going one under the hood (specially the interaction with Neovim through the socket).
+You can increase the terminal verbosity with `-v/--verbose` (INFO), `-d/--debug` (DEBUG), or
+`-t/--trace` to see everything that is going one under the hood (specially the interaction with
+Neovim through the socket). Independently, the log file level can be raised setting the
+`NYSOR_LOGFILE_LEVEL` environment variable to `debug` or `trace`.
 
 
 ### Specifying which Neovim to use as backend

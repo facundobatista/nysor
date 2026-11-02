@@ -5,6 +5,8 @@
 """Shared test configuration and fixtures."""
 
 import os
+import tempfile
+from pathlib import Path
 
 import logassert
 
@@ -16,6 +18,9 @@ import pytest  # NOQA
 from nysor import logtools  # NOQA
 
 logassert.install_custom_level("trace", logtools._TRACE_LEVEL)
+
+# keep test runs from leaving log files in the user's real log dir; do this BEFORE logsetup
+logtools._LOGS_DIR = Path(tempfile.mkdtemp(prefix="nysor-test-logs-"))
 logtools.logsetup(None)
 
 
