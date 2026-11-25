@@ -28,7 +28,7 @@ LOG_LEVELS = {
 _LOGFILE_ENVVAR = "NYSOR_LOGFILE_LEVEL"
 _LOGS_DIR = Path(platformdirs.user_log_dir("nysor"))
 
-_LOG_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-5s %(prefix)-7s %(message)s"
+_LOG_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-8s %(prefix)-7s %(message)s"
 _LOG_DATEFMT = "%H:%M:%S"
 
 _ORIG_GETLOGGER = logging.getLogger
@@ -52,8 +52,8 @@ def _getlogger(name=None, prefix=None):
 def _makerecord(self, *args, **kwargs):
     """Create the record and copy into it the logger's already decided prefix, bracketed."""
     record = _ORIG_MAKERECORD(self, *args, **kwargs)
-    prefix = getattr(self, "_nysor_prefix", None) or self.name.rsplit(".", 1)[-1]
-    record.prefix = f"[{prefix}]"
+    prefix = getattr(self, "_nysor_prefix", None)
+    record.prefix = f"[{prefix}]" if prefix else ""
     return record
 
 

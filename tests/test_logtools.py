@@ -170,10 +170,10 @@ class TestPrefix:
             logger.info("hola")
         assert caplog.records[-1].prefix == "[some_module]"
 
-    def test_logger_missing_prefix_falls_back_to_name(self, caplog):
+    def test_logger_missing_prefix_falls_back_to_empty(self, caplog):
         """Loggers created before logtools was imported still get a sane prefix."""
         logger = logging.getLogger("nysor.tree.other_module")
         del logger._nysor_prefix  # as such a logger would come
         with caplog.at_level(logging.INFO):
             logger.info("hola")
-        assert caplog.records[-1].prefix == "[other_module]"
+        assert caplog.records[-1].prefix == ""
