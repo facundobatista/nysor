@@ -78,13 +78,6 @@ def _trace(self, message, *args):
 logging.Logger.trace = _trace
 
 
-class _FileOnlyFilter(logging.Filter):
-    """Drop the records marked as file-only, so those lines never reach the terminal."""
-
-    def filter(self, record):
-        return not getattr(record, "file_only", False)
-
-
 def _decide_logfile_level():
     """Decide the log file level from the NYSOR_LOGFILE_LEVEL environment variable.
 
@@ -103,7 +96,7 @@ def _decide_logfile_level():
     return logging.INFO, value, False
 
 
-def _logfile_path():
+def _get_logfile_path():
     """Return the path of this run's log file: 'nysor-<timestamp>-<pid>.log'."""
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     return _LOGS_DIR / f"nysor-{stamp}-{os.getpid()}.log"
@@ -119,19 +112,13 @@ def logsetup(selected_level):
 
     formatter = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
     tag = object()  # marks the handlers of this run, so tests can tell them apart
-
-    # terminal: everything from the selected level up, except the lines marked as file only
     root = logging.getLogger()
-    terminal = logging.StreamHandler(sys.stdout)
-    terminal.setFormatter(formatter)
-    terminal.setLevel(terminal_level)
-    terminal.addFilter(_FileOnlyFilter())
-    terminal._nysor_tag = tag
-    root.addHandler(terminal)
 
-    # disk: always there, with its own (env var switchable) level
+    # disk: always there, with its own (env var switchable) level; added FIRST, so the hint
+    # below (if any) is logged while this is the only destination, landing only in the file
     _LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    disk = logging.FileHandler(_logfile_path(), encoding="utf-8", delay=True)
+    logfile_path = _get_logfile_path()
+    disk = logging.FileHandler(logfile_path, encoding="utf-8", delay=True)
     disk.setFormatter(formatter)
     disk.setLevel(disk_level)
     disk._nysor_tag = tag
@@ -141,18 +128,28 @@ def logsetup(selected_level):
     # destination applies its own level on top
     logging.getLogger("nysor").setLevel(min(terminal_level, disk_level))
 
+    # hint about the env var: emitted now, while the disk is the only destination
+    if show_hint:
+        logger.info("To log more information set NYSOR_LOGFILE_LEVEL to 'debug' or 'trace'")
+
+    # terminal: everything from the selected level up
+    terminal = logging.StreamHandler(sys.stdout)
+    terminal.setFormatter(formatter)
+    terminal.setLevel(terminal_level)
+    terminal._nysor_tag = tag
+    root.addHandler(terminal)
+
     # use new format styles
     foffinf.formatize("nysor", scatter=True)
 
-    # report the log file situation, now that the handlers are in place
+    # report an invalid env var value, with both destinations already in place
     if invalid_value is not None:
         logger.error(
             "Invalid value {!r} for NYSOR_LOGFILE_LEVEL; valid values: 'debug', 'trace' "
             "(the log file keeps the default INFO level)", invalid_value)
-    elif show_hint:
-        logger.info(
-            "To log more information set NYSOR_LOGFILE_LEVEL to 'debug' or 'trace'",
-            extra={"file_only": True})
+
+    # indicate in trace the location of the file
+    logger.trace("Location of logs in disk: {}", logfile_path)
 
 
 def log_notdone(msg, **items):

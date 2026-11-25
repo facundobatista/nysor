@@ -32,15 +32,19 @@ def fresh_logging(mocker, tmp_path):
 
     Yields a function `added(predicate)` answering which handlers matching the predicate were
     added by this test's logsetup call -- identified by the tag that logsetup sets on its
-    handlers (conftest already ran logsetup, so its handlers and pytest's own must not be
-    confused with these, and pytest shuffles root.handlers between test phases anyway).
-    Handlers added by the test are removed afterwards, and the "nysor" level restored.
+    handlers (pytest's own handlers are untagged, and pytest shuffles root.handlers between
+    test phases anyway). conftest already ran logsetup, so its handlers are removed during the
+    test (restored afterwards), along with the ones the test added; the "nysor" level is also
+    restored.
     """
     mocker.patch.object(logtools, "_LOGS_DIR", tmp_path)
     root = logging.getLogger()
     nysor_logger = logging.getLogger("nysor")
     old_level = nysor_logger.level
     before_tags = {getattr(h, "_nysor_tag", None) for h in root.handlers}
+    previous_tagged = [h for h in root.handlers if getattr(h, "_nysor_tag", None) is not None]
+    for handler in previous_tagged:
+        root.removeHandler(handler)
 
     def added(predicate):
         """Return the handlers matching `predicate` that this test's logsetup added."""
@@ -55,6 +59,8 @@ def fresh_logging(mocker, tmp_path):
     for handler in list(root.handlers):
         if getattr(handler, "_nysor_tag", None) not in before_tags | {None}:
             root.removeHandler(handler)
+    for handler in previous_tagged:
+        root.addHandler(handler)
 
 
 def _is_terminal(handler):
@@ -84,8 +90,9 @@ class TestTerminalLevels:
 class TestLogSetup:
     """logsetup configures two destinations, each one with its own level."""
 
-    def test_logfile_is_created_with_default_info_level(self, fresh_logging):
+    def test_logfile_is_created_with_default_info_level(self, fresh_logging, monkeypatch):
         """Without the environment variable, the log file records INFO and above."""
+        monkeypatch.delenv("NYSOR_LOGFILE_LEVEL")
         logtools.logsetup(None)
         disk, = fresh_logging(lambda h: isinstance(h, logging.FileHandler))
         assert disk.level == logging.INFO
@@ -109,17 +116,18 @@ class TestLogSetup:
         logtools.logsetup(None)
         assert logging.getLogger("nysor").level == 5  # min(WARNING from terminal, TRACE disk)
 
-    def test_hint_is_logged_only_for_disk(self, fresh_logging, caplog):
-        """In the default setup, a line hints the user about the env var; only in the file."""
+    def test_hint_is_logged_only_for_disk(self, fresh_logging, capsys, monkeypatch):
+        """In the default setup, the hint reaches the file but never the terminal.
+
+        The hint is emitted while the disk handler is the only destination (the terminal one
+        is added right after), so the ordering is what keeps it out of stdout.
+        """
+        monkeypatch.delenv("NYSOR_LOGFILE_LEVEL")
         logtools.logsetup(None)
         disk, = fresh_logging(lambda h: isinstance(h, logging.FileHandler))
-        terminal, = fresh_logging(_is_terminal)
-        hints = [r for r in caplog.records if "NYSOR_LOGFILE_LEVEL" in r.getMessage()]
-        assert len(hints) == 1
-        assert hints[0].levelno == logging.INFO
-        assert hints[0].file_only is True
-        assert not terminal.filter(hints[0])
-        assert disk.filter(hints[0])
+        with open(disk.baseFilename, encoding="utf-8") as logfile:
+            assert "NYSOR_LOGFILE_LEVEL" in logfile.read()
+        assert "NYSOR_LOGFILE_LEVEL" not in capsys.readouterr().out
 
     def test_envvar_debug_switches_only_the_disk(self, fresh_logging, caplog, mocker):
         """NYSOR_LOGFILE_LEVEL=debug raises the file level, leaves the terminal alone, no hint."""
@@ -138,8 +146,9 @@ class TestLogSetup:
         disk, = fresh_logging(lambda h: isinstance(h, logging.FileHandler))
         assert disk.level == 5
 
-    def test_envvar_invalid_value_logs_error_and_keeps_default(self, fresh_logging, caplog,
-                                                               mocker):
+    def test_envvar_invalid_value_logs_error_and_keeps_default(
+        self, fresh_logging, caplog, capsys, mocker
+    ):
         """A wrong env var value logs an ERROR (visible everywhere) and keeps INFO in the file."""
         mocker.patch.dict(os.environ, {"NYSOR_LOGFILE_LEVEL": "banana"})
         logtools.logsetup(None)
@@ -149,6 +158,8 @@ class TestLogSetup:
         assert "banana" in errors[0].getMessage()
         assert "NYSOR_LOGFILE_LEVEL" in errors[0].getMessage()
         assert disk.level == logging.INFO
+        # "visible everywhere": the ERROR also made it to the terminal
+        assert "NYSOR_LOGFILE_LEVEL" in capsys.readouterr().out
 
 
 class TestPrefix:
