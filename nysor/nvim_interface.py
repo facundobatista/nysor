@@ -14,6 +14,7 @@ import uuid
 
 import msgpack
 
+from nysor import logtools  # noqa: F401  (patches getLogger, needed for `prefix` below)
 from nysor import nvim_versions
 
 # do not poll more frequently than these seconds
@@ -22,7 +23,7 @@ POLL_FREEZE_PERIOD = 0.005
 # some Neovim translation constants; this is filled by the API info
 _EXT_TYPE_CODES = {}
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__, prefix="nvim")
 
 
 class NeovimError(Exception):

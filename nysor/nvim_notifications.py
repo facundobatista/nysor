@@ -11,9 +11,10 @@ from typing import Any
 
 from PyQt6.QtWidgets import QWidget
 
+from nysor import logtools  # noqa: F401  (patches getLogger, needed for `prefix` below)
 from nysor.utils import call_async
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__, prefix="notif")
 
 # sentinel telling GridRegistry.get()/get_required() a keyword was not passed at all, distinct from
 # a key explicitly looked up as None (e.g. get(pane=None) is a valid, if useless, lookup)

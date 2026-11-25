@@ -13,8 +13,6 @@ from pathlib import Path
 import foffinf
 import platformdirs
 
-logger = logging.getLogger(__name__)
-
 _TRACE_LEVEL = 5
 LOG_LEVELS = {
     "verbose": (logging.INFO, "Show INFO and above in the terminal."),
@@ -30,33 +28,54 @@ LOG_LEVELS = {
 _LOGFILE_ENVVAR = "NYSOR_LOGFILE_LEVEL"
 _LOGS_DIR = Path(platformdirs.user_log_dir("nysor"))
 
-# short curated log prefixes, by logger name; unmapped loggers fall back to their module name
-LOG_PREFIXES = {
-    "nysor.nvim_interface": "nvim",
-    "nysor.nvim_notifications": "notif",
-}
 _LOG_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-5s %(prefix)-7s %(message)s"
 _LOG_DATEFMT = "%H:%M:%S"
 
+_ORIG_GETLOGGER = logging.getLogger
+_ORIG_MAKERECORD = logging.Logger.makeRecord
 
-def _trace(self, message, *args, **kwargs):
+
+def _getlogger(name=None, prefix=None):
+    """Return the logger for `name`, deciding its prefix at capture time.
+
+    The prefix is either explicitly given or the module name (the last component of the
+    logger's name); it is stored in the logger itself, to be copied into every record
+    afterwards (see _makerecord).
+    """
+    logger = _ORIG_GETLOGGER(name)
+    if prefix is None:
+        prefix = logger.name.rsplit(".", 1)[-1]
+    logger._nysor_prefix = prefix
+    return logger
+
+
+def _makerecord(self, *args, **kwargs):
+    """Create the record and copy into it the logger's already decided prefix, bracketed."""
+    record = _ORIG_MAKERECORD(self, *args, **kwargs)
+    prefix = getattr(self, "_nysor_prefix", None) or self.name.rsplit(".", 1)[-1]
+    record.prefix = f"[{prefix}]"
+    return record
+
+
+# the prefix is decided at capture time (getLogger) and carried by the records (makeRecord);
+# patching instead of subclassing also covers loggers created before this module gets imported
+logging.getLogger = _getlogger
+logging.Logger.makeRecord = _makerecord
+
+logger = logging.getLogger(__name__)
+
+
+def _trace(self, message, *args):
     """Log the message with severity TRACE."""
     if self.isEnabledFor(_TRACE_LEVEL):
-        kwargs["stacklevel"] = kwargs.get("stacklevel", 1) + 1
-        self._log(_TRACE_LEVEL, message, args, **kwargs)
+        # logging's findCaller only skips frames internal to logging itself, so explicitly
+        # skip this helper's frame to report the real caller
+        self._log(_TRACE_LEVEL, message, args, stacklevel=2)
 
 
 # make `logger.trace(...)` available everywhere; patching the class also affects loggers
 # created before this module gets imported
 logging.Logger.trace = _trace
-
-
-class _PrefixFormatter(logging.Formatter):
-    """A formatter that shows a curated prefix (see LOG_PREFIXES), falling back to the module."""
-
-    def formatMessage(self, record):
-        record.prefix = f"[{LOG_PREFIXES.get(record.name, record.module)}]"
-        return super().formatMessage(record)
 
 
 class _FileOnlyFilter(logging.Filter):
@@ -98,7 +117,7 @@ def logsetup(selected_level):
     terminal_level = LOG_LEVELS[selected_level][0]
     disk_level, invalid_value, show_hint = _decide_logfile_level()
 
-    formatter = _PrefixFormatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
+    formatter = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
     tag = object()  # marks the handlers of this run, so tests can tell them apart
 
     # terminal: everything from the selected level up, except the lines marked as file only

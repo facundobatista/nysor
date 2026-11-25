@@ -151,22 +151,29 @@ class TestLogSetup:
         assert disk.level == logging.INFO
 
 
-class TestPrefixFormatter:
-    """Log lines carry a curated prefix (see LOG_PREFIXES), or the module name when unmapped."""
+class TestPrefix:
+    """The prefix is decided when the logger is captured, then copied into every record."""
 
-    def _format(self, name, pathname):
-        """Format a minimal record, the same way logsetup configures the root handler."""
-        record = logging.LogRecord(name, logging.INFO, pathname, 1, "hello", None, None)
-        formatter = logtools._PrefixFormatter(logtools._LOG_FORMAT, datefmt=logtools._LOG_DATEFMT)
-        return formatter.format(record)
+    def test_explicit_prefix_decided_at_capture(self, caplog):
+        """getLogger(prefix=...) stores the prefix at capture; records carry it bracketed."""
+        logger = logging.getLogger("nysor.tree.fruit", prefix="fruta")
+        assert logger._nysor_prefix == "fruta"
+        with caplog.at_level(logging.INFO):
+            logger.info("hola")
+        assert caplog.records[-1].prefix == "[fruta]"
 
-    def test_mapped_logger_gets_curated_prefix(self):
-        """A logger in LOG_PREFIXES logs with its curated prefix, not its module name."""
-        out = self._format("nysor.nvim_interface", "/somewhere/nvim_interface.py")
-        assert "[nvim]" in out
-        assert "nvim_interface" not in out
+    def test_default_prefix_is_the_module_name(self, caplog):
+        """Without an explicit prefix, the decided one is the module name (last component)."""
+        logger = logging.getLogger("nysor.tree.some_module")
+        assert logger._nysor_prefix == "some_module"
+        with caplog.at_level(logging.INFO):
+            logger.info("hola")
+        assert caplog.records[-1].prefix == "[some_module]"
 
-    def test_unmapped_logger_falls_back_to_module_name(self):
-        """A logger not in LOG_PREFIXES logs with its module name."""
-        out = self._format("nysor.text_display", "/somewhere/text_display.py")
-        assert "[text_display]" in out
+    def test_logger_missing_prefix_falls_back_to_name(self, caplog):
+        """Loggers created before logtools was imported still get a sane prefix."""
+        logger = logging.getLogger("nysor.tree.other_module")
+        del logger._nysor_prefix  # as such a logger would come
+        with caplog.at_level(logging.INFO):
+            logger.info("hola")
+        assert caplog.records[-1].prefix == "[other_module]"
