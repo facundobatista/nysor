@@ -29,7 +29,6 @@ _LOGFILE_ENVVAR = "NYSOR_LOGFILE_LEVEL"
 _LOGS_DIR = Path(platformdirs.user_log_dir("nysor"))
 
 _LOG_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-8s %(prefix)-7s %(message)s"
-_LOG_DATEFMT = "%H:%M:%S"
 
 _ORIG_GETLOGGER = logging.getLogger
 _ORIG_MAKERECORD = logging.Logger.makeRecord
@@ -52,7 +51,7 @@ def _getlogger(name=None, prefix=None):
 def _makerecord(self, *args, **kwargs):
     """Create the record and copy into it the logger's already decided prefix, bracketed."""
     record = _ORIG_MAKERECORD(self, *args, **kwargs)
-    prefix = getattr(self, "_nysor_prefix", None)
+    prefix = getattr(self, "_nysor_prefix", None)  # may be missing if log from deps internals
     record.prefix = f"[{prefix}]" if prefix else ""
     return record
 
@@ -110,7 +109,7 @@ def logsetup(selected_level):
     terminal_level = LOG_LEVELS[selected_level][0]
     disk_level, invalid_value, show_hint = _decide_logfile_level()
 
-    formatter = logging.Formatter(_LOG_FORMAT, datefmt=_LOG_DATEFMT)
+    formatter = logging.Formatter(_LOG_FORMAT)
     tag = object()  # marks the handlers of this run, so tests can tell them apart
     root = logging.getLogger()
 
@@ -149,7 +148,7 @@ def logsetup(selected_level):
             "(the log file keeps the default INFO level)", invalid_value)
 
     # indicate in trace the location of the file
-    logger.trace("Location of logs in disk: {}", logfile_path)
+    logger.debug("Location of logs in disk: {}", logfile_path)
 
 
 def log_notdone(msg, **items):
