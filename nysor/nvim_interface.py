@@ -167,12 +167,14 @@ class NvimInterface:
         # just send ESC
         await self._request(None, None, "nvim_input", "<Esc>")
 
-        # this is a weird request; if all continues OK, Neovim will quit and a possible callback
-        # is never called; however if there's a situation and Neovim can't quit, the errback
-        # will be called. We use 'qall' (quit *all* windows/tabpages) so this really quits the
-        # editor; plain 'quit' would only close the current window when several are open.
+        # 'silent' is key: if Neovim can't quit (e.g. E37 for unsaved buffers), the displayed
+        # error would leave it stuck at the hit-enter prompt, holding the answer to this very
+        # request forever; silenced, there is no display (so no prompt) and the error still
+        # surfaces through the response, right away. It is 'qall' (quit *all* windows/tabpages)
+        # so this really quits the editor; plain 'quit' would only close the current window
+        # when several are open.
         self._neovim_being_quited = True
-        await self._request(None, eback, "nvim_command", "qall")
+        await self._request(None, eback, "nvim_command", "silent qall")
 
         await self._quit_processed.wait()
         self._neovim_being_quited = False

@@ -92,7 +92,7 @@ class TestLogSetup:
 
     def test_logfile_is_created_with_default_info_level(self, fresh_logging, monkeypatch):
         """Without the environment variable, the log file records INFO and above."""
-        monkeypatch.delenv("NYSOR_LOGFILE_LEVEL")
+        monkeypatch.delenv("NYSOR_LOGFILE_LEVEL", raising=False)
         logtools.logsetup(None)
         disk, = fresh_logging(lambda h: isinstance(h, logging.FileHandler))
         assert disk.level == logging.INFO
@@ -122,7 +122,7 @@ class TestLogSetup:
         The hint is emitted while the disk handler is the only destination (the terminal one
         is added right after), so the ordering is what keeps it out of stdout.
         """
-        monkeypatch.delenv("NYSOR_LOGFILE_LEVEL")
+        monkeypatch.delenv("NYSOR_LOGFILE_LEVEL", raising=False)
         logtools.logsetup(None)
         disk, = fresh_logging(lambda h: isinstance(h, logging.FileHandler))
         with open(disk.baseFilename, encoding="utf-8") as logfile:

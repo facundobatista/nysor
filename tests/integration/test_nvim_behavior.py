@@ -331,3 +331,22 @@ class TestPerGridResizeIndependence:
             group[0] for name, args in redraw_events(raw) if name == "grid_resize"
             for group in args]
         assert resized_grids == [grid_a]
+
+
+class TestQuitWithUnsavedBuffers:
+    """quit() stays bounded when Neovim refuses to quit (E37) because of unsaved buffers.
+
+    The quit command runs silently, so the refused quit does not leave Neovim at the hit-enter
+    prompt (which would hold the RPC answer forever): the error surfaces right away.
+    """
+
+    async def test_quit_returns_error_and_does_not_hang(self, nvim):
+        iface, _notifs, _main_window, _raw = nvim
+        await attach_multigrid(iface)
+        await iface.call("nvim_command", "normal! ixxx")  # leave a modified buffer behind
+        await settle(iface)
+
+        error = await iface.quit()
+        assert "E37" in error
+        # Neovim refused to quit, so it must still be alive for the caller to handle
+        assert iface._proc.poll() is None
