@@ -35,7 +35,7 @@ dynamic = ["version"]
 dev = [
     "codespell",
     "pytest",
-    "logassert",
+    "logassert>=8.7",
     "pytest-asyncio",
     "pytest-mock",
     "pytest-timeout",

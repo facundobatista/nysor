@@ -14,6 +14,7 @@ import uuid
 
 import msgpack
 
+from nysor import logtools  # noqa: F401  (patches getLogger, needed for `prefix` below)
 from nysor import nvim_versions
 
 # do not poll more frequently than these seconds
@@ -22,7 +23,7 @@ POLL_FREEZE_PERIOD = 0.005
 # some Neovim translation constants; this is filled by the API info
 _EXT_TYPE_CODES = {}
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__, prefix="nvim")
 
 
 class NeovimError(Exception):
@@ -35,11 +36,6 @@ class NeovimError(Exception):
 
 class NeovimExecutableNotFound(NeovimError):
     """The executable to run neovim was not found."""
-
-
-def trace(msg, *params):
-    """Log in trace level with a prefix."""
-    logger.log(logging.TRACE, "[nvim] " + msg, *params)
 
 
 def ext_hook(code, data):
@@ -171,12 +167,14 @@ class NvimInterface:
         # just send ESC
         await self._request(None, None, "nvim_input", "<Esc>")
 
-        # this is a weird request; if all continues OK, Neovim will quit and a possible callback
-        # is never called; however if there's a situation and Neovim can't quit, the errback
-        # will be called. We use 'qall' (quit *all* windows/tabpages) so this really quits the
-        # editor; plain 'quit' would only close the current window when several are open.
+        # 'silent' is key: if Neovim can't quit (e.g. E37 for unsaved buffers), the displayed
+        # error would leave it stuck at the hit-enter prompt, holding the answer to this very
+        # request forever; silenced, there is no display (so no prompt) and the error still
+        # surfaces through the response, right away. It is 'qall' (quit *all* windows/tabpages)
+        # so this really quits the editor; plain 'quit' would only close the current window
+        # when several are open.
         self._neovim_being_quited = True
-        await self._request(None, eback, "nvim_command", "qall")
+        await self._request(None, eback, "nvim_command", "silent qall")
 
         await self._quit_processed.wait()
         self._neovim_being_quited = False
@@ -233,7 +231,10 @@ class NvimInterface:
 
         # type (0 == request), msgid, method, params
         payload = msgpack.packb([0, self._cb_counter, method.encode("ascii"), params])
-        trace("Sending request id={:d} method={!r} params={}", self._cb_counter, method, params)
+        logger.trace(
+            "Sending request id={:d} method={!r} params={}",
+            self._cb_counter, method, params,
+        )
         try:
             await self._loop.sock_sendall(self._client, payload)
         except BrokenPipeError:
@@ -267,13 +268,16 @@ class NvimInterface:
 
         # really read
         return_code = self._proc.poll()
-        trace("Reading response; rc {}", return_code)
+        logger.trace("Reading response; rc {}", return_code)
 
         for msgtype, *rest in self._read_messages():
             if msgtype == 1:
                 # response
                 msgid, error, result = rest
-                trace("Receiving response msgid={:d} error={!r} result={!r}", msgid, error, result)
+                logger.trace(
+                    "Receiving response msgid={:d} error={!r} result={!r}",
+                    msgid, error, result,
+                )
                 callback, errback = self._callbacks.pop(msgid)
 
                 if error is not None:
@@ -286,7 +290,7 @@ class NvimInterface:
             elif msgtype == 2:
                 # notification
                 method, params = rest
-                trace("Receiving notification method={!r} params={!r}", method, params)
+                logger.trace("Receiving notification method={!r} params={!r}", method, params)
                 self._notif_handler(method, params)
 
             else:

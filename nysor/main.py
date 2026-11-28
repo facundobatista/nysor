@@ -42,8 +42,11 @@ from PyQt6.QtCore import Qt, QEvent, QSize, QTimer
 from PyQt6.QtGui import QIcon, QAction, QCursor
 
 
-from nysor import recent_files, swarm, nvim_versions
+# logtools first: importing it installs the patched getLogger, so the loggers captured below
+# get their prefix decided (see logtools)
 from nysor.logtools import log_notdone, logsetup, LOG_LEVELS
+
+from nysor import recent_files, swarm, nvim_versions
 from nysor.nvim_interface import NvimInterface, NeovimExecutableNotFound, NeovimError
 from nysor.nvim_notifications import NvimNotifications, registry
 from nysor.text_display import TextDisplay, MIN_COLS_ROWS

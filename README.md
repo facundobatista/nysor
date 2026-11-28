@@ -73,9 +73,13 @@ grep process.txt | nysor -
 
 ### Controlling logs
 
-By default some INFO is sent to the terminal.
+Nysor always logs to a file (`nysor-<timestamp>-<pid>.log` in its log directory), recording
+everything from INFO up. The terminal only shows warnings and errors.
 
-You can reduce the logs verbosity with `-q/--quiet`, increase it with `-v/--verbose`, or even use `-t/--trace` to see everything that is going one under the hood (specially the interaction with Neovim through the socket).
+You can increase the terminal verbosity with `-v/--verbose` (INFO), `-d/--debug` (DEBUG), or
+`-t/--trace` to see everything that is going one under the hood (specially the interaction with
+Neovim through the socket). Independently, the log file level can be raised setting the
+`NYSOR_LOGFILE_LEVEL` environment variable to `debug` or `trace`.
 
 
 ### Specifying which Neovim to use as backend
@@ -118,9 +122,6 @@ The idea is to have a solid editor in one window for version 1.0; there will be 
 These are the items lousely grouped to get there:
 
 **For 0.9:**
-- Check missing low-bar replacement
-- FIXME.94 allow logging system to use `logger.trace`
-- allow double-level logging (user selected to terminal, debug to a file if configured)
 - docs/2026-08-24-optimizations.md
 
 **For 1.0:**
@@ -138,6 +139,9 @@ The path after that is less descriptive. The following are the big items I want 
     - simple, showing the directory where the process is run
     - if double click in a file, it should open a new window/tab with the new buffer
 - split command bar / messages
+    - the low-bar shows some info like "mode", the edited file (already duplicated in the tab above), etc
+        - can we show this information better somewhere else?
+        - what info do we have exactly?
     - try to separate, if possible, the command bar from Neovim's grid itself
         - add better history and ways to search/filter previous commands
     - try to separate, if possible, the windows for messages from the editor
